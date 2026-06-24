@@ -8,34 +8,27 @@ Customer Satisfaction (CSAT) Tool - A comprehensive application for managing and
 csat-tool/
 ├── backend/                  # FastAPI application
 ├── frontend/                 # React application
-├── database/                 # SQL scripts & migrations
-│   ├── mock_tms/             # Mock TMS schema + seed data
-│   └── app/                  # Application schema
 ├── docs/                     # Reference documents
 │   ├── Quality.docx
-│   └── CSAT_Tool_Requirements_Document.docx
 ├── .gitignore
 ├── README.md
-└── docker-compose.yml        # Spin up PG + backend + frontend together
-```
+
 
 ## Prerequisites
 
-- Docker & Docker Compose
 - Python 3.9+ (for local backend development)
-- Node.js 16+ (for local frontend development)
-- PostgreSQL 13+
+- React.js (for local frontend development)
+- MySQL
 
 ## Quick Start
 
-### Using Docker Compose (Recommended)
-
 ```bash
-docker-compose up
+frontend :- npm run dev
+backend :- uvicorn main:app --reload
 ```
 
 This will start:
-- PostgreSQL database on `localhost:5432`
+- MySQL database on `localhost:3306`
 - FastAPI backend on `localhost:8000`
 - React frontend on `localhost:3000`
 
@@ -54,20 +47,8 @@ uvicorn main:app --reload
 ```bash
 cd frontend
 npm install
-npm start
+npm run dev
 ```
-
-#### Database Setup
-```bash
-cd database
-# Apply migrations
-psql -U postgres -d csat_db -f app/schema.sql
-psql -U postgres -d csat_db -f mock_tms/seed.sql
-```
-
-## Documentation
-
-See [docs/](./docs/) for detailed requirements and quality documentation.
 
 ## Development
 
