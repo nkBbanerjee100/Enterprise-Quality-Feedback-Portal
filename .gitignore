@@ -1,0 +1,23 @@
+# env secrets
+.env
+backend/.env
+*.env
+
+# python cache
+__pycache__/
+*.pyc
+
+# virtual env
+venv/
+mvenv/
+env/
+
+# frontend ignore
+frontend/
+
+# zip ignore
+*.zip
+
+# vscode
+.vscode/
+
