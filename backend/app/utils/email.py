@@ -1,9 +1,12 @@
-"""Email sending utilities"""
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 from typing import List, Optional
+from app.config import settings
 
 
 class EmailSender:
-    """Send emails"""
 
     @staticmethod
     def send_email(
@@ -14,17 +17,77 @@ class EmailSender:
         cc: Optional[List[str]] = None,
         bcc: Optional[List[str]] = None,
     ) -> bool:
-        """Send email"""
-        # TODO: Implement email sending
-        pass
 
-    @staticmethod
-    def send_template_email(
-        to: str,
-        template_name: str,
-        context: dict,
-        cc: Optional[List[str]] = None,
-    ) -> bool:
-        """Send templated email"""
-        # TODO: Implement templated email
-        pass
+        try:
+
+            message = MIMEMultipart("alternative")
+
+            message["From"] = settings.smtp_user
+            message["To"] = to
+            message["Subject"] = subject
+
+
+            if cc:
+                message["Cc"] = ",".join(cc)
+
+
+            message.attach(
+                MIMEText(body, "plain")
+            )
+
+
+            if html_content:
+
+                message.attach(
+                    MIMEText(
+                        html_content,
+                        "html"
+                    )
+                )
+
+
+            recipients = [to]
+
+
+            if cc:
+                recipients += cc
+
+
+            if bcc:
+                recipients += bcc
+
+
+
+            server = smtplib.SMTP(
+                settings.smtp_server,
+                settings.smtp_port
+            )
+
+
+            server.starttls()
+
+
+            server.login(
+                settings.smtp_user,
+                settings.smtp_password
+            )
+
+
+            server.sendmail(
+                settings.smtp_user,
+                recipients,
+                message.as_string()
+            )
+
+
+            server.quit()
+
+
+            return True
+
+
+        except Exception as e:
+
+            print("SMTP ERROR:", e)
+
+            return False

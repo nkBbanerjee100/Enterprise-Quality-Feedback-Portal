@@ -34,3 +34,8 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 settings = Settings()
+# Application
+app_name: str = "CSAT Tool"
+app_version: str = "1.0.0"
+debug: bool = False
+frontend_url: str = "http://localhost:3000"   # ← ADD THIS LINE
