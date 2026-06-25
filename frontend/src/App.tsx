@@ -115,7 +115,9 @@ function App() {
               path="/csat-cycles"
               element={
                 <ProtectedRoute>
+                   <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER]}>
                   <CsatCycleListPage />
+                  </RoleProtectedRoute>
                 </ProtectedRoute>
               }
             />

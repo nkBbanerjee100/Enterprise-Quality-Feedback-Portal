@@ -24,11 +24,18 @@ export interface PaginationParams {
 export interface CSATCycle {
   id: number;
   cycleName: string;
+  cycle_name?: string;
   description?: string;
   startDate: string;
+  start_date: string;
   endDate: string;
+  end_date: string;
   isActive: boolean;
+  is_active: boolean;
+  year?: number;
+  half?: 'H1' | 'H2';
   createdAt: string;
+  created_at: string;
 }
 
 export interface ActionPlan {

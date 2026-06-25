@@ -1,16 +1,12 @@
 /**
- * Create CSAT Cycle Page (placeholder)
+ * Create CSAT Cycle Page — creation is handled via modal on the list page.
+ * This route just redirects back there.
  */
-import React from 'react';
-import { PageWrapper } from '../../components/layout/PageWrapper';
+import React, { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export const CreateCsatCyclePage: React.FC = () => {
-  return (
-    <PageWrapper>
-      <div className="text-center py-12">
-        <h1 className="text-3xl font-bold">Create CSAT Cycle</h1>
-        <p className="text-gray-600 mt-2">Coming soon...</p>
-      </div>
-    </PageWrapper>
-  );
+  const navigate = useNavigate();
+  useEffect(() => { navigate('/csat-cycles', { replace: true }); }, [navigate]);
+  return null;
 };
