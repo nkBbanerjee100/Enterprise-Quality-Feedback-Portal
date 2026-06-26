@@ -10,12 +10,19 @@ class FeedbackResponse(Base):
 
     id = Column(Integer, primary_key=True)
     feedback_request_id = Column(Integer, ForeignKey("fact_feedback_request.id"), nullable=False)
-    csat_score = Column(Float, nullable=False)  # 1-5 or 1-10
-    nps_score = Column(Float)  # Net Promoter Score
-    comments = Column(Text)
-    response_data = Column(JSON)  # Additional structured response data
+
+    # ── Per-question answer (one row per question) ────────────────────────────
+    question_id  = Column(Integer, nullable=True)    # matches SurveyQuestion.id on frontend
+    answer_value = Column(Text, nullable=True)        # rating as "1"–"5", or free-text
+
+    # ── Legacy aggregate fields (kept for backward compat) ───────────────────
+    csat_score    = Column(Float, nullable=True)
+    nps_score     = Column(Float, nullable=True)
+    comments      = Column(Text)
+    response_data = Column(JSON)   # optional extra payload
+
     submitted_at = Column(DateTime, nullable=False, server_default=func.now())
-    created_at = Column(DateTime, server_default=func.now())
+    created_at   = Column(DateTime, server_default=func.now())
 
     def __repr__(self):
         return f"<FeedbackResponse {self.id}>"
