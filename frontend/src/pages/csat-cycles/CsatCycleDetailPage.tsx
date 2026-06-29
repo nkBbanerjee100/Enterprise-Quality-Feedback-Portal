@@ -36,9 +36,11 @@ function EligibilityBadge({ status }: { status: EligibilityStatus }) {
 
 // ─── Enroll Modal ─────────────────────────────────────────────────────────────
 function EnrollModal({
-  cycleId, enrolledIds, onClose, onDone,
+  cycleId, enrolledIds, onClose, onDone, cycleStartDate, cycleEndDate,
 }: {
   cycleId: number; enrolledIds: Set<number>; onClose: () => void; onDone: () => void;
+  cycleStartDate: string | null;   // e.g. "2025-07-01T00:00:00"
+  cycleEndDate: string | null;     // e.g. "2025-12-31T23:59:59"
 }) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -59,12 +61,24 @@ function EnrollModal({
     );
     const active: any[] = [];
     const completed: any[] = [];
+    const cycleStart = cycleStartDate ? new Date(cycleStartDate) : null;
+    const cycleEnd   = cycleEndDate   ? new Date(cycleEndDate)   : null;
     for (const p of available) {
       const status = deriveStatus(p.end_date ?? null);
       if (status === 'active' || status === 'testing') {
         active.push(p);
       } else {
+         if (cycleStart && cycleEnd && p.end_date) {
+      const projectEnd = new Date(p.end_date);
+      if (projectEnd >= cycleStart && projectEnd <= cycleEnd) {
         completed.push(p);
+      }
+      // else: completed outside this cycle's window — don't show
+      }
+         // if cycle dates unknown, fall back to showing all completed (safe default)
+        else if (!cycleStart || !cycleEnd) {
+      completed.push(p);
+        }
       }
     }
     active.sort((a, b) => a.project_name.localeCompare(b.project_name));
@@ -742,6 +756,8 @@ export const CsatCycleDetailPage: React.FC = () => {
           enrolledIds={enrolledTmsIds}
           onClose={() => setEnrollModal(false)}
           onDone={() => { setEnrollModal(false); invalidate(); }}
+           cycleStartDate={(cycle as any)?.start_date ?? (cycle as any)?.startDate ?? null}
+          cycleEndDate={(cycle as any)?.end_date   ?? (cycle as any)?.endDate   ?? null}
         />
       )}
       {exemptTarget && (

@@ -72,6 +72,12 @@ const NAV_ITEMS: NavItem[] = [
     icon:  '☰',
     roles: [UserRole.QUALITY  ,UserRole.MANAGER],
   },
+  {
+    label: 'Register User',
+    path:  '/register',
+    icon:  '⊕',
+    roles: [UserRole.QUALITY, UserRole.MANAGER],
+  },
 ];
 
 const ROLE_LABEL: Record<UserRole, string> = {

@@ -112,6 +112,13 @@ const TopNav: React.FC = () => {
         })}
       </ul>
 
+      <a
+          href="https://www.mindteck.com/"
+          className="rounded-full border border-[#D6D6D6] px-5 py-2 text-sm font-medium text-[#1A1A1A] shadow-sm transition hover:-translate-y-0.5 hover:border-[#909090] hover:shadow-md"
+        >
+          Visit Mindteck
+        </a>
+
       {/* CTA */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         {isAuthenticated ? (
@@ -124,16 +131,11 @@ const TopNav: React.FC = () => {
             }}
           >Go to Dashboard →</button>
         ) : (
-          <>
-            <Link to={ROUTES.LOGIN} style={{
-              fontSize: 13, fontWeight: 500, color: MUTED,
-              textDecoration: 'none', padding: '9px 16px',
-            }}>Sign in</Link>
-            <Link to={ROUTES.REGISTER} style={{
-              padding: '9px 20px', background: G, color: '#fff',
-              borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: 'none',
-            }}>Get started</Link>
-          </>
+          <Link to={ROUTES.LOGIN} style={{
+            padding: '9px 20px', background: G, color: '#fff',
+            borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: 'none',
+          }}>Sign in</Link>
+
         )}
       </div>
     </nav>
@@ -144,7 +146,7 @@ const TopNav: React.FC = () => {
 const HeroSection: React.FC = () => {
   const { isAuthenticated, user } = useAuthStore();
   const navigate = useNavigate();
-  const dest = user ? ROLE_HOME[user.role] ?? ROUTES.DASHBOARD : ROUTES.REGISTER;
+  const dest = user ? ROLE_HOME[user.role] ?? ROUTES.DASHBOARD : ROUTES.LOGIN;
 
   return (
     <section style={{
@@ -246,7 +248,7 @@ const HeroSection: React.FC = () => {
               boxShadow: '0 4px 14px rgba(26,92,58,0.3)',
             }}
           >
-            {isAuthenticated ? 'Go to Dashboard' : 'Get started'}
+            {isAuthenticated ? 'Go to Dashboard' : 'Sign in'}
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M5 12h14M12 5l7 7-7 7" />
@@ -268,7 +270,7 @@ const StatsStrip: React.FC = () => {
   const stats = [
     { value: '100%',       label: 'TMS-integrated projects' },
     { value: 'Real-time',  label: 'CSAT dashboard & KPIs'   },
-    { value: '3 roles',    label: 'Role-based access control' },
+    { value: '4 roles',    label: 'Role-based access control' },
     { value: 'Full audit', label: 'Status trail & logs'      },
   ];
   return (
@@ -574,7 +576,7 @@ const StatusSection: React.FC = () => {
 const RolesSection: React.FC = () => {
   const roles = [
     {
-      name: 'Quality Admin',
+      name: 'Quality ',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={G} strokeWidth="2" strokeLinecap="round">
           <circle cx="12" cy="12" r="3" />
@@ -586,7 +588,7 @@ const RolesSection: React.FC = () => {
       can: ['Configure feedback templates', 'Send & resend forms', 'Export reports', 'View audit logs', 'Manage portal settings'],
     },
     {
-      name: 'Quality User',
+      name: 'Manager',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={GOLD} strokeWidth="2" strokeLinecap="round">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -598,7 +600,7 @@ const RolesSection: React.FC = () => {
       can: ['View completed projects', 'Send feedback forms', 'Track pending responses', 'Export allowed data'],
     },
     {
-      name: 'Management',
+      name: 'Sales',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round">
           <line x1="18" y1="20" x2="18" y2="10" />
@@ -611,7 +613,7 @@ const RolesSection: React.FC = () => {
       can: ['View CSAT dashboards', 'View quality trends', 'Customer satisfaction summaries', 'Export reports (permitted)'],
     },
     {
-      name: 'Customer',
+      name: 'Delivery',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#B9503C" strokeWidth="2" strokeLinecap="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -685,7 +687,7 @@ const RolesSection: React.FC = () => {
 const CtaBand: React.FC = () => {
   const { isAuthenticated, user } = useAuthStore();
   const navigate = useNavigate();
-  const dest = user ? ROLE_HOME[user.role] ?? ROUTES.DASHBOARD : ROUTES.REGISTER;
+  const dest = user ? ROLE_HOME[user.role] ?? ROUTES.DASHBOARD : ROUTES.LOGIN;
 
   return (
     <div style={{
@@ -715,7 +717,7 @@ const CtaBand: React.FC = () => {
           Ready to start collecting feedback?
         </h2>
         <p style={{ fontSize: 15, color: 'rgba(255,255,255,0.68)', margin: '0 0 32px' }}>
-          Register your employee account and access your role-based workspace in minutes.
+          Contact your Quality or Manager admin to get your account. Then sign in below.
         </p>
         <button
           onClick={() => navigate(dest)}
@@ -728,12 +730,11 @@ const CtaBand: React.FC = () => {
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-            <circle cx="9" cy="7" r="4" />
-            <line x1="19" y1="8" x2="19" y2="14" />
-            <line x1="22" y1="11" x2="16" y2="11" />
+            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+            <polyline points="10 17 15 12 10 7" />
+            <line x1="15" y1="12" x2="3" y2="12" />
           </svg>
-          {isAuthenticated ? 'Go to Dashboard' : 'Create your account'}
+          {isAuthenticated ? 'Go to Dashboard' : 'Sign in'}
         </button>
       </div>
     </div>
@@ -753,10 +754,7 @@ const Footer: React.FC = () => (
       <Link to={ROUTES.LOGIN} style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', textDecoration: 'none' }}>
         Sign in
       </Link>
-      <Link to={ROUTES.REGISTER} style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', textDecoration: 'none' }}>
-        Register
-      </Link>
-      <a href="https://www.mindteck.com/" target="_blank" rel="noopener noreferrer"
+<a href="https://www.mindteck.com/" target="_blank" rel="noopener noreferrer"
         style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', textDecoration: 'none' }}>
         Visit Mindteck ↗
       </a>

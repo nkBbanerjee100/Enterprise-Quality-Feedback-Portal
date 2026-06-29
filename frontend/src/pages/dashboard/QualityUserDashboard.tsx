@@ -268,10 +268,16 @@ export const QualityUserDashboard: React.FC = () => {
   const projects         = projectsData?.projects ?? [];
 
   const kpis = {
-    sent:      dashData?.metrics?.totalResponses ?? 0,
-    submitted: feedbackRequests.filter(r => ['SUBMITTED', 'completed'].includes(r.status)).length,
-    pending:   dashData?.pendingRequests ?? feedbackRequests.filter(r => ['pending', 'SENT', 'OPENED', 'ELIGIBLE'].includes(r.status)).length,
-    expired:   feedbackRequests.filter(r => ['EXPIRED', 'expired'].includes(r.status)).length,
+    // Prefer dashboard API counts (real DB), fall back to client-side filter on local data
+    sent:      dashData?.metrics?.totalResponses
+               ?? feedbackRequests.length,
+    submitted: dashData?.metrics?.totalSubmitted
+               ?? feedbackRequests.filter(r => ['SUBMITTED', 'completed'].includes(r.status)).length,
+    pending:   dashData?.metrics?.totalPending
+               ?? dashData?.pendingRequests
+               ?? feedbackRequests.filter(r => ['pending', 'SENT', 'OPENED', 'ELIGIBLE', 'sent', 'opened'].includes(r.status)).length,
+    expired:   dashData?.metrics?.totalExpired
+               ?? feedbackRequests.filter(r => ['EXPIRED', 'expired'].includes(r.status)).length,
     responseRate: dashData?.metrics?.satisfactionRate != null
       ? `${(dashData.metrics.satisfactionRate * 100).toFixed(0)}%`
       : '—',
@@ -474,7 +480,6 @@ export const QualityUserDashboard: React.FC = () => {
                 <TH>End Date</TH>
                 <TH>PM</TH>
                 <TH>Current Status</TH>
-                <TH></TH>
               </tr>
             </thead>
             <tbody>

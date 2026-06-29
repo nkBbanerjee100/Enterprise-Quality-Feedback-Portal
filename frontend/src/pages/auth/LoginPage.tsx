@@ -171,12 +171,7 @@ export const LoginPage: React.FC = () => {
           <div className="w-full max-w-[440px] rounded-2xl border border-[#ECECEC] bg-white p-10 shadow-[0_24px_60px_-15px_rgba(13,59,38,0.16)]">
             <div className="mb-9">
               <h2 className="mb-1.5 text-[26px] font-bold text-[#1A1A1A]">Welcome back</h2>
-              <p className="text-sm text-[#6B6B6B]">
-                Don't have an account?{' '}
-                <a href="/register" className="font-medium text-[#1A5C3A] hover:underline">
-                  Create one free
-                </a>
-              </p>
+<p className="text-sm text-[#6B6B6B]">Sign in with your Mindteck credentials.</p>
             </div>
 
             {loginError && (

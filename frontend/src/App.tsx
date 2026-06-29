@@ -66,9 +66,20 @@ function App() {
           <Routes>
             {/* ── Public routes ─────────────────────────────────────────── */}
             <Route path="/login"           element={<LoginPage />} />
-            <Route path="/register"        element={<RegisterPage />} />
             <Route path="/unauthorized"    element={<UnauthorizedPage />} />
             <Route path="/survey/:token"   element={<CustomerSurveyPage />} />
+
+            {/* Register User — protected, Quality + Manager only */}
+            <Route
+              path="/register"
+              element={
+                <ProtectedRoute>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER]}>
+                    <RegisterPage />
+                  </RoleProtectedRoute>
+                </ProtectedRoute>
+              }
+            />
 
             {/* ── Quality User & System Integration User ─────────────────── */}
             <Route

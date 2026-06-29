@@ -3,7 +3,10 @@
  */
 
 export interface DashboardMetrics {
-  totalResponses: number;
+  totalResponses: number;       // total forms sent
+  totalSubmitted?: number;      // completed responses
+  totalPending?: number;        // awaiting response
+  totalExpired?: number;        // expired links
   averageCsatScore?: number;
   averageNpsScore?: number;
   satisfactionRate?: number;
@@ -20,7 +23,7 @@ export interface KPICard {
   title: string;
   value: number | string;
   unit?: string;
-  trend?: number; // percentage change
+  trend?: number;
   icon?: string;
 }
 

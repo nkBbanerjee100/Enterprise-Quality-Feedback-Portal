@@ -34,22 +34,21 @@ function DeleteCycleModal({
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
         <div className="px-6 py-4 bg-red-50 border-b border-red-100 flex justify-between items-center">
           <div>
-            <h3 className="font-bold text-red-900">Delete CSAT Cycle</h3>
+            <h3 className="font-bold text-red-900">Remove CSAT Cycle</h3>
             <p className="text-xs text-red-600 mt-0.5">{cycleName}</p>
           </div>
           <button onClick={onClose} className="text-red-400 hover:text-red-700 text-xl leading-none">×</button>
         </div>
         <div className="px-6 py-5 space-y-3">
           <p className="text-sm text-gray-700">
-            Are you sure you want to permanently delete <strong>{cycleName}</strong>?
+            Are you sure you want to remove <strong>{cycleName}</strong> from the portal?
           </p>
-          <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 space-y-1">
-            <p className="font-semibold">This will also delete:</p>
-            <p>• All project enrollments in this cycle</p>
-            <p>• All eligibility decisions and manager approvals</p>
-            <p>• All feedback requests linked to this cycle</p>
+          <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-xs text-blue-800 space-y-1">
+            <p className="font-semibold">What happens:</p>
+            <p>• The cycle will no longer appear anywhere in the portal</p>
+            <p>• All associated data is retained in the database</p>
+            <p>• This can be reversed by the system admin if needed</p>
           </div>
-          <p className="text-xs text-gray-400">This action cannot be undone.</p>
         </div>
         <div className="px-6 pb-5 flex justify-end gap-3">
           <button
@@ -65,7 +64,7 @@ function DeleteCycleModal({
             className="px-5 py-2 text-sm font-semibold rounded-lg text-white hover:opacity-90 disabled:opacity-50"
             style={{ background: '#DC2626' }}
           >
-            {isDeleting ? 'Deleting...' : 'Yes, Delete Cycle'}
+            {isDeleting ? 'Deleting...' : 'Yes, Remove Cycle'}
           </button>
         </div>
       </div>
@@ -100,6 +99,20 @@ export const CsatCycleListPage: React.FC = () => {
     (data?.data ?? []).forEach(c => { if (c.year) years.add(c.year); });
     return Array.from(years).sort((a, b) => b - a); // newest first
   }, [data]);
+
+  // Derive available halves from loaded data (only show H1/H2 if cycles exist for them)
+  const availableHalves = useMemo(() => {
+    const halves = new Set<'H1' | 'H2'>();
+    (data?.data ?? []).forEach(c => { if (c.half === 'H1' || c.half === 'H2') halves.add(c.half); });
+    return (['H1', 'H2'] as const).filter(h => halves.has(h));
+  }, [data]);
+
+  // Reset halfFilter if the selected half no longer exists in data
+  React.useEffect(() => {
+    if (halfFilter !== null && !availableHalves.includes(halfFilter)) {
+      setHalfFilter(null);
+    }
+  }, [availableHalves, halfFilter]);
 
   // Client-side filter + paginate
   const filtered = useMemo(() => {
@@ -185,7 +198,7 @@ export const CsatCycleListPage: React.FC = () => {
           {/* H1 / H2 toggle */}
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-gray-400 font-medium mr-1">Half</span>
-            {(['H1', 'H2'] as const).map(h => (
+            {availableHalves.map(h => (
               <button
                 key={h}
                 onClick={() => { setHalfFilter(halfFilter === h ? null : h); setPage(1); }}
