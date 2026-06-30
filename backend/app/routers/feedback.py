@@ -1,49 +1,49 @@
-"""Feedback collection and management routes — stateless signed tokens (no DB)"""
+"""Feedback collection and management routes"""
 import hmac
 import hashlib
 import base64
 import json
 import time
-from fastapi import APIRouter, HTTPException, status
+from datetime import datetime, timedelta
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel
-from typing import Optional
-
+from typing import Optional, List
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+ 
 from app.utils.email import EmailSender
 from app.config import settings
-
+from app.database import get_local_db, get_tms_db
+from app.core.dependencies import get_current_user
+ 
 router = APIRouter()
-
+ 
 # Token expires in 30 days
 TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
-
-
+ 
+ 
 # ── Schemas ────────────────────────────────────────────────────────────────────
-
+ 
 class FeedbackRequestPayload(BaseModel):
     projectId:      int
     recipientEmail: str
     recipientName:  str
     csatCycleId:    Optional[int] = None
     message:        Optional[str] = None
-
-
+ 
+ 
 class SurveyAnswer(BaseModel):
     questionId: int
     value:      str
-
-
+ 
+ 
 class SurveySubmitPayload(BaseModel):
     answers: list[SurveyAnswer]
-
-
+ 
+ 
 # ── Token helpers ──────────────────────────────────────────────────────────────
-
+ 
 def _create_survey_token(project_id: int, recipient_email: str) -> str:
-    """
-    Create a signed token encoding projectId, email, and expiry.
-    Format: base64(payload_json).base64(hmac_signature)
-    No DB needed — the signature proves it's authentic.
-    """
     payload = {
         "pid":   project_id,
         "email": recipient_email,
@@ -52,51 +52,44 @@ def _create_survey_token(project_id: int, recipient_email: str) -> str:
     payload_b64 = base64.urlsafe_b64encode(
         json.dumps(payload).encode()
     ).decode().rstrip("=")
-
+ 
     sig = hmac.new(
         settings.secret_key.encode(),
         payload_b64.encode(),
         hashlib.sha256,
     ).digest()
     sig_b64 = base64.urlsafe_b64encode(sig).decode().rstrip("=")
-
+ 
     return f"{payload_b64}.{sig_b64}"
-
-
+ 
+ 
 def _verify_survey_token(token: str) -> dict:
-    """
-    Verify and decode a survey token.
-    Returns the payload dict, or raises HTTPException on failure.
-    """
     try:
         payload_b64, sig_b64 = token.split(".", 1)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid token format.")
-
-    # Verify signature
+ 
     expected_sig = hmac.new(
         settings.secret_key.encode(),
         payload_b64.encode(),
         hashlib.sha256,
     ).digest()
     expected_b64 = base64.urlsafe_b64encode(expected_sig).decode().rstrip("=")
-
+ 
     if not hmac.compare_digest(expected_b64, sig_b64):
         raise HTTPException(status_code=400, detail="Invalid or tampered token.")
-
-    # Decode payload
+ 
     padding = "=" * (-len(payload_b64) % 4)
     payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
-
-    # Check expiry
+ 
     if time.time() > payload["exp"]:
         raise HTTPException(status_code=410, detail="This survey link has expired.")
-
+ 
     return payload
-
-
+ 
+ 
 # ── Email builders ─────────────────────────────────────────────────────────────
-
+ 
 def _build_email_html(recipient_name: str, project_id: int, survey_link: str, personal_message: Optional[str]) -> str:
     personal_block = ""
     if personal_message and personal_message.strip():
@@ -104,7 +97,7 @@ def _build_email_html(recipient_name: str, project_id: int, survey_link: str, pe
         <div style="background:#f0fdf4;border-left:4px solid #16a34a;border-radius:4px;padding:12px 16px;margin:20px 0;font-style:italic;color:#374151;">
           {personal_message.strip()}
         </div>"""
-
+ 
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
@@ -144,73 +137,275 @@ def _build_email_html(recipient_name: str, project_id: int, survey_link: str, pe
   </div>
 </body>
 </html>"""
-
-
+ 
+ 
 def _build_email_text(recipient_name: str, project_id: int, survey_link: str, personal_message: Optional[str]) -> str:
     lines = [f"Dear {recipient_name},", "", f"Thank you for working with us on project #{project_id}.", ""]
     if personal_message and personal_message.strip():
         lines += [personal_message.strip(), ""]
     lines += ["Submit your feedback here:", survey_link, "", "This link expires in 30 days.", "", "© 2026 CSAT Tool · Mindteck"]
     return "\n".join(lines)
-
-
+ 
+ 
 # ── Routes ─────────────────────────────────────────────────────────────────────
-
+ 
+@router.get("/requests")
+def list_feedback_requests(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """List all feedback requests with project name from TMS, paginated."""
+    rows = db.execute(
+        text("""
+            SELECT
+                fr.id,
+                fr.csat_cycle_id,
+                fr.project_id,
+                fr.recipient_email,
+                fr.recipient_name,
+                fr.feedback_url,
+                fr.token,
+                fr.expires_at,
+                fr.request_sent_at,
+                fr.reminder_sent_at,
+                fr.status,
+                fr.created_at
+            FROM fact_feedback_request fr
+            ORDER BY fr.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """),
+        {"limit": limit, "skip": skip},
+    ).fetchall()
+ 
+    total_row = db.execute(
+        text("SELECT COUNT(*) AS cnt FROM fact_feedback_request")
+    ).fetchone()
+    total = total_row.cnt if total_row else 0
+ 
+    # Fetch project names from TMS for all project_ids in this page
+    project_ids = list({r.project_id for r in rows if r.project_id})
+    project_name_map: dict[int, str] = {}
+    if project_ids:
+        tms_rows = tms_db.execute(
+            text("SELECT Id, Name FROM tsms_projects WHERE Id IN :ids"),
+            {"ids": tuple(project_ids)},
+        ).fetchall()
+        project_name_map = {r.Id: r.Name for r in tms_rows}
+ 
+    data = []
+    for r in rows:
+        data.append({
+            "id":             r.id,
+            "csatCycleId":    r.csat_cycle_id,
+            "projectId":      r.project_id,
+            "projectName":    project_name_map.get(r.project_id),
+            "recipientEmail": r.recipient_email,
+            "recipientName":  r.recipient_name,
+            "feedbackUrl":    r.feedback_url,
+            "requestSentAt":  r.request_sent_at.isoformat() if r.request_sent_at else None,
+            "reminderSentAt": r.reminder_sent_at.isoformat() if r.reminder_sent_at else None,
+            "status":         r.status,
+            "createdAt":      r.created_at.isoformat() if r.created_at else None,
+            "expiresAt":      r.expires_at.isoformat() if r.expires_at else None,
+        })
+ 
+    return {"data": data, "total": total}
+ 
+ 
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
-def create_feedback_request(payload: FeedbackRequestPayload):
-    """Send feedback request email with a signed survey link. No DB needed."""
-
+def create_feedback_request(
+    payload: FeedbackRequestPayload,
+    db: Session = Depends(get_local_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Send feedback request email + persist record to fact_feedback_request."""
+ 
     token       = _create_survey_token(payload.projectId, payload.recipientEmail)
     survey_link = f"{settings.FRONTEND_URL}/survey/{token}"
-
+    now         = datetime.utcnow()
+    expires_at  = now + timedelta(seconds=TOKEN_EXPIRY_SECONDS)
+ 
     email_sent = EmailSender.send_email(
         to=payload.recipientEmail,
         subject=f"[Feedback Request] Project #{payload.projectId} — Please Share Your Experience",
         body=_build_email_text(payload.recipientName, payload.projectId, survey_link, payload.message),
         html_content=_build_email_html(payload.recipientName, payload.projectId, survey_link, payload.message),
     )
-
+ 
+    # Persist to DB regardless of email result so records are tracked
+    # status = "sent" if email went through, "pending" if SMTP failed
+    record_status = "sent" if email_sent else "pending"
+ 
+    try:
+        db.execute(
+            text("""
+                INSERT INTO fact_feedback_request
+                    (csat_cycle_id, project_id, recipient_email, recipient_name,
+                     token, feedback_url, expires_at, request_sent_at, status, created_at)
+                VALUES
+                    (:cycle_id, :project_id, :email, :name,
+                     :token, :url, :expires_at, :sent_at, :status, :created_at)
+            """),
+            {
+                "cycle_id":   payload.csatCycleId,
+                "project_id": payload.projectId,
+                "email":      payload.recipientEmail,
+                "name":       payload.recipientName,
+                "token":      token,
+                "url":        survey_link,
+                "expires_at": expires_at,
+                "sent_at":    now if email_sent else None,
+                "status":     record_status,
+                "created_at": now,
+            },
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] Failed to persist feedback request to DB: {e}")
+        # Still return success if email went through
+ 
     if not email_sent:
-        raise HTTPException(status_code=500, detail="Failed to send feedback email. Please check SMTP configuration.")
-
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send feedback email. Record saved as pending — check SMTP configuration.",
+        )
+ 
     return {
         "success":    True,
         "email_sent": True,
         "sent_to":    payload.recipientEmail,
         "project_id": payload.projectId,
+        "status":     record_status,
         "message":    f"Feedback request email successfully sent to {payload.recipientEmail}",
     }
-
-
+ 
+ 
 # ── Public survey endpoints (no auth, no DB) ───────────────────────────────────
-
+ 
 @router.get("/public/{token}")
 def get_survey_by_token(token: str):
     """Validate token and return project context for the survey page."""
-    payload = _verify_survey_token(token)   # raises 400/410 on failure
+    payload = _verify_survey_token(token)
     return {
         "valid":     True,
         "projectId": payload["pid"],
         "email":     payload["email"],
     }
-
-
+ 
+ 
 @router.post("/public/{token}/submit", status_code=status.HTTP_201_CREATED)
-def submit_survey(token: str, body: SurveySubmitPayload):
+def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(get_local_db)):
     """
-    Validate token and accept survey answers.
-    Without a DB you can't prevent double-submit server-side,
-    but the frontend disables the form after first submission.
-    To prevent double-submit properly, add a simple submitted-token
-    cache (e.g. an in-memory set or Redis) later.
+    Validate token, save answers to fact_feedback_response, mark request completed.
     """
-    payload = _verify_survey_token(token)   # raises 400/410 on failure
-
-    # ── At this point you can: ────────────────────────────────────────────────
-    # 1. Forward answers to an external system (TMS, Google Sheets, etc.)
-    # 2. Send a confirmation email
-    # 3. Log to a file
-    # For now we just acknowledge receipt.
-    print(f"[SURVEY SUBMIT] project={payload['pid']} email={payload['email']} answers={body.answers}")
-
+    payload = _verify_survey_token(token)
+ 
+    try:
+        # Get the feedback request id for this token
+        req_row = db.execute(
+            text("SELECT id FROM fact_feedback_request WHERE token = :token LIMIT 1"),
+            {"token": token},
+        ).fetchone()
+ 
+        if req_row:
+            request_id = req_row.id
+ 
+            # Insert each answer
+            for answer in body.answers:
+                db.execute(
+                    text("""
+                        INSERT INTO fact_feedback_response
+                            (feedback_request_id, question_id, answer_value, submitted_at)
+                        VALUES
+                            (:request_id, :question_id, :answer_value, NOW())
+                    """),
+                    {
+                        "request_id":   request_id,
+                        "question_id":  answer.questionId,
+                        "answer_value": answer.value,
+                    },
+                )
+ 
+            # Mark request completed
+            db.execute(
+                text("UPDATE fact_feedback_request SET status = 'completed' WHERE id = :id"),
+                {"id": request_id},
+            )
+ 
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] Could not save survey responses: {e}")
+ 
     return {"success": True, "message": "Thank you! Your feedback has been recorded."}
+ 
+ 
+@router.get("/requests/{request_id}/responses")
+def get_request_responses(
+    request_id: int,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get all answers submitted for a specific feedback request."""
+    req = db.execute(
+        text("""
+            SELECT id, recipient_name, recipient_email,
+                   project_id, status, created_at, request_sent_at
+            FROM fact_feedback_request
+            WHERE id = :id
+        """),
+        {"id": request_id},
+    ).fetchone()
+ 
+    if not req:
+        raise HTTPException(status_code=404, detail="Feedback request not found")
+ 
+    # Fetch project name from TMS
+    project_name = None
+    try:
+        tms_row = tms_db.execute(
+            text("SELECT Name FROM tsms_projects WHERE Id = :pid LIMIT 1"),
+            {"pid": req.project_id},
+        ).fetchone()
+        if tms_row:
+            project_name = tms_row.Name
+    except Exception:
+        pass
+ 
+    answers = db.execute(
+        text("""
+            SELECT id, question_id, answer_value, submitted_at
+            FROM fact_feedback_response
+            WHERE feedback_request_id = :id
+            ORDER BY question_id ASC
+        """),
+        {"id": request_id},
+    ).fetchall()
+ 
+    return {
+        "request": {
+            "id":             req.id,
+            "recipientName":  req.recipient_name,
+            "recipientEmail": req.recipient_email,
+            "projectId":      req.project_id,
+            "projectName":    project_name,
+            "status":         req.status,
+            "createdAt":      req.created_at.isoformat() if req.created_at else None,
+            "requestSentAt":  req.request_sent_at.isoformat() if req.request_sent_at else None,
+        },
+        "answers": [
+            {
+                "id":          a.id,
+                "questionId":  a.question_id,
+                "answerValue": a.answer_value,
+                "submittedAt": a.submitted_at.isoformat() if a.submitted_at else None,
+            }
+            for a in answers
+        ],
+        "totalAnswers": len(answers),
+    }
