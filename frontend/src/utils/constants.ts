@@ -38,7 +38,7 @@ export const NPS_SCALE  = 10;
 export const ROUTES = {
   HOME:               '/',
   LOGIN:              '/login',
-  REGISTER:           '/register',
+  REGISTER:           '/register-self',
   UNAUTHORIZED:       '/unauthorized',
 
   // Quality User default landing

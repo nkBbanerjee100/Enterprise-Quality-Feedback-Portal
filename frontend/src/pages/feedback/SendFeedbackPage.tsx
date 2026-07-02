@@ -1,41 +1,41 @@
 /**
- * Send Feedback Page
- * Quality User flow: pick project → enter customer details → confirm → send
- *
- * Steps:
- *  1. Search & select a completed TMS project
- *  2. Enter customer recipient details
- *  3. Preview & confirm
- *  4. Success — token created, email sent
- *
- * Calls: POST /api/feedback/requests
- */
+* Send Feedback Page
+* Quality User flow: pick project → enter customer details → confirm → send
+*
+* Steps:
+*  1. Search & select a completed TMS project
+*  2. Enter customer recipient details
+*  3. Preview & confirm
+*  4. Success — token created, email sent
+*
+* Calls: POST /api/feedback/requests
+*/
 import React, { useState, useRef, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { PageWrapper }    from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useCompletedProjects, useProject } from '../../hooks/useProjects';
 import { TMSProject }     from '../../types/project.types';
 import { feedbackApi }    from '../../api/feedback.api';
 import { BRAND }          from '../../utils/constants';
-
+ 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
+ 
 function fmtDate(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
   });
 }
-
+ 
 function isTestingPurpose(end_date: string | null) {
   return !!end_date && new Date(end_date).getFullYear() === 2099;
 }
-
+ 
 // ── step indicator ─────────────────────────────────────────────────────────────
-
+ 
 const STEPS = ['Select Project', 'Customer Details', 'Review & Send'];
-
+ 
 const StepBar: React.FC<{ current: number }> = ({ current }) => (
   <div style={{ display: 'flex', alignItems: 'center', marginBottom: 32 }}>
     {STEPS.map((label, i) => {
@@ -73,9 +73,9 @@ const StepBar: React.FC<{ current: number }> = ({ current }) => (
     })}
   </div>
 );
-
+ 
 // ── Step 1: Project picker ─────────────────────────────────────────────────────
-
+ 
 const ProjectPicker: React.FC<{
   selected: TMSProject | null;
   onSelect: (p: TMSProject) => void;
@@ -85,24 +85,24 @@ const ProjectPicker: React.FC<{
   const [page, setPage]       = useState(1);
   const PAGE = 10;
   const timer = useRef<ReturnType<typeof setTimeout>>();
-
+ 
   const { data, isLoading, error } = useCompletedProjects(
     (page - 1) * PAGE, PAGE, dSearch || undefined,
   );
-
+ 
   const handleSearch = useCallback((val: string) => {
     setSearch(val);
     setPage(1);
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setDSearch(val), 350);
   }, []);
-
+ 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
         Select the completed project you want to send a feedback form for.
       </p>
-
+ 
       {/* Search */}
       <div style={{ position: 'relative', maxWidth: 400 }}>
         <span style={{
@@ -121,7 +121,7 @@ const ProjectPicker: React.FC<{
           }}
         />
       </div>
-
+ 
       {/* List */}
       <div style={{
         border: `1px solid ${BRAND.border}`, borderRadius: 10, overflow: 'hidden',
@@ -187,7 +187,7 @@ const ProjectPicker: React.FC<{
           })
         )}
       </div>
-
+ 
       {/* Pagination */}
       {data && data.total > PAGE && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -219,15 +219,15 @@ const ProjectPicker: React.FC<{
     </div>
   );
 };
-
+ 
 // ── Step 2: Customer details form ──────────────────────────────────────────────
-
+ 
 interface CustomerForm {
   recipientName:  string;
   recipientEmail: string;
   message:        string;
 }
-
+ 
 const CustomerDetailsStep: React.FC<{
   form: CustomerForm;
   onChange: (f: CustomerForm) => void;
@@ -236,7 +236,7 @@ const CustomerDetailsStep: React.FC<{
   const set = (key: keyof CustomerForm) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       onChange({ ...form, [key]: e.target.value });
-
+ 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '10px 12px', boxSizing: 'border-box',
     border: `1.5px solid ${BRAND.border}`, borderRadius: 8,
@@ -247,7 +247,7 @@ const CustomerDetailsStep: React.FC<{
     fontSize: 11, fontWeight: 700, color: BRAND.textMid,
     letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6,
   };
-
+ 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Selected project recap */}
@@ -266,11 +266,11 @@ const CustomerDetailsStep: React.FC<{
           </div>
         </div>
       </div>
-
+ 
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
         Enter the customer contact who should receive the feedback form.
       </p>
-
+ 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div>
           <label style={labelStyle}>Recipient Name *</label>
@@ -293,7 +293,7 @@ const CustomerDetailsStep: React.FC<{
           />
         </div>
       </div>
-
+ 
       <div>
         <label style={labelStyle}>Personal Message (optional)</label>
         <textarea
@@ -307,9 +307,9 @@ const CustomerDetailsStep: React.FC<{
     </div>
   );
 };
-
+ 
 // ── Step 3: Review & confirm ───────────────────────────────────────────────────
-
+ 
 const ReviewStep: React.FC<{
   project: TMSProject;
   form: CustomerForm;
@@ -326,13 +326,13 @@ const ReviewStep: React.FC<{
       <span style={{ fontSize: 13, color: BRAND.textDark }}>{value}</span>
     </div>
   );
-
+ 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
         Please review the details before sending. The customer will receive a secure feedback link by email.
       </p>
-
+ 
       {/* Project card */}
       <div style={{
         background: '#fff', border: `1px solid ${BRAND.border}`,
@@ -349,7 +349,7 @@ const ReviewStep: React.FC<{
         <Row label="Completed"    value={fmtDate(project.end_date)} />
         <div style={{ paddingBottom: 8 }} />
       </div>
-
+ 
       {/* Customer card */}
       <div style={{
         background: '#fff', border: `1px solid ${BRAND.border}`,
@@ -365,7 +365,7 @@ const ReviewStep: React.FC<{
         {form.message && <Row label="Message" value={form.message} />}
         <div style={{ paddingBottom: 8 }} />
       </div>
-
+ 
       {/* Info banner */}
       <div style={{
         background: '#EFF6FF', border: '1px solid #BFDBFE',
@@ -378,9 +378,9 @@ const ReviewStep: React.FC<{
     </div>
   );
 };
-
+ 
 // ── Success screen ─────────────────────────────────────────────────────────────
-
+ 
 const SuccessScreen: React.FC<{
   project: TMSProject;
   recipientEmail: string;
@@ -426,14 +426,35 @@ const SuccessScreen: React.FC<{
     </div>
   );
 };
-
+ 
 // ── Main page ──────────────────────────────────────────────────────────────────
-
+ 
 export const SendFeedbackPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
-  const preselectedId  = searchParams.get('project_id');
-
+ 
+  // Project can be preselected two ways:
+  //  1. ?project_id=X query param (legacy / direct links)
+  //  2. navigate('/feedback/send', { state: { cycleId, projectId, enrollmentId } })
+  //     — used by the CSAT Cycle detail page's "Send Feedback →" button
+  const navState = (location.state ?? {}) as {
+    cycleId?: number; projectId?: number; enrollmentId?: number;
+  };
+  const preselectedId = navState.projectId ?? (Number(searchParams.get('project_id')) || undefined);
+  const cycleId        = navState.cycleId ?? 0;
+ 
+  // Where "Back"/"Cancel" should return to. If we arrived from a CSAT Cycle's
+  // detail page (state.cycleId present), go back there; otherwise the
+  // general Feedback list.
+  const returnTo  = navState.cycleId ? `/csat-cycles/${navState.cycleId}` : '/feedback';
+  const returnLabel = navState.cycleId ? 'Back to Cycle' : 'Back to Feedback';
+ 
+  // If a project came preselected, the flow starts at step 1 (Customer
+  // Details) and the picker (step 0) is skipped — so "Back" from step 1
+  // should return to returnTo, not reveal the picker.
+  const entryStep = preselectedId !== undefined ? 1 : 0;
+ 
   const [step, setStep]               = useState(0);
   const [selectedProject, setSelected] = useState<TMSProject | null>(null);
   const [customerForm, setCustomerForm] = useState<CustomerForm>({
@@ -444,15 +465,17 @@ export const SendFeedbackPage: React.FC = () => {
   const [sending, setSending]   = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [success, setSuccess]   = useState(false);
-
-  // If navigated from project detail page with ?project_id=X, preselect it
+ 
+  // If a project was preselected (via query param or nav state), skip step 1
+  // and jump straight to Customer Details once it's loaded.
   const { data: preProject } = useProject(Number(preselectedId));
   React.useEffect(() => {
     if (preProject && !selectedProject) {
       setSelected(preProject);
+      setStep(1);
     }
   }, [preProject]);
-
+ 
   // Validation per step
   const canNext = () => {
     if (step === 0) return !!selectedProject;
@@ -463,7 +486,7 @@ export const SendFeedbackPage: React.FC = () => {
     }
     return true;
   };
-
+ 
   const handleSend = async () => {
     if (!selectedProject) return;
     setSending(true);
@@ -473,7 +496,7 @@ export const SendFeedbackPage: React.FC = () => {
         projectId:      selectedProject.project_id,
         recipientEmail: customerForm.recipientEmail.trim(),
         recipientName:  customerForm.recipientName.trim(),
-        csatCycleId:    0,   // cycles not wired yet — backend should handle 0 / null
+        csatCycleId:    cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
       });
       setSuccess(true);
     } catch (err: any) {
@@ -484,7 +507,7 @@ export const SendFeedbackPage: React.FC = () => {
       setSending(false);
     }
   };
-
+ 
   const reset = () => {
     setStep(0);
     setSelected(null);
@@ -492,21 +515,21 @@ export const SendFeedbackPage: React.FC = () => {
     setSendError(null);
     setSuccess(false);
   };
-
+ 
   return (
     <PageWrapper>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
-
+ 
         {/* Page header */}
         <div style={{ marginBottom: 28 }}>
           <button
-            onClick={() => step > 0 && !success ? setStep(s => s - 1) : navigate('/feedback')}
+            onClick={() => step > entryStep && !success ? setStep(s => s - 1) : navigate(returnTo)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
               color: BRAND.textMid, fontSize: 13, fontWeight: 500,
               padding: 0, marginBottom: 14, display: 'inline-flex', alignItems: 'center', gap: 6,
             }}
-          >← {step > 0 && !success ? 'Back' : 'Back to Feedback'}</button>
+          >← {step > entryStep && !success ? 'Back' : returnLabel}</button>
           <p style={{
             fontSize: 11, fontWeight: 700, color: BRAND.gold,
             letterSpacing: '0.10em', textTransform: 'uppercase', margin: '0 0 4px',
@@ -515,7 +538,7 @@ export const SendFeedbackPage: React.FC = () => {
             Send Feedback Form
           </h1>
         </div>
-
+ 
         {/* Card */}
         <div style={{
           background: '#fff', borderRadius: 12,
@@ -532,7 +555,7 @@ export const SendFeedbackPage: React.FC = () => {
           ) : (
             <>
               <StepBar current={step} />
-
+ 
               {step === 0 && (
                 <ProjectPicker
                   selected={selectedProject}
@@ -552,7 +575,7 @@ export const SendFeedbackPage: React.FC = () => {
                   form={customerForm}
                 />
               )}
-
+ 
               {/* Error */}
               {sendError && (
                 <div style={{
@@ -563,7 +586,7 @@ export const SendFeedbackPage: React.FC = () => {
                   {sendError}
                 </div>
               )}
-
+ 
               {/* Footer actions */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between',
@@ -571,14 +594,14 @@ export const SendFeedbackPage: React.FC = () => {
                 paddingTop: 20, borderTop: `1px solid ${BRAND.border}`,
               }}>
                 <button
-                  onClick={() => step > 0 ? setStep(s => s - 1) : navigate('/feedback')}
+                  onClick={() => step > entryStep ? setStep(s => s - 1) : navigate(returnTo)}
                   style={{
                     padding: '10px 20px', background: '#fff',
                     border: `1.5px solid ${BRAND.border}`, borderRadius: 8,
                     fontSize: 13, fontWeight: 600, color: BRAND.textMid, cursor: 'pointer',
                   }}
-                >{step === 0 ? 'Cancel' : '← Back'}</button>
-
+                >{step === entryStep ? 'Cancel' : '← Back'}</button>
+ 
                 {step < STEPS.length - 1 ? (
                   <button
                     onClick={() => setStep(s => s + 1)}
@@ -622,8 +645,9 @@ export const SendFeedbackPage: React.FC = () => {
           )}
         </div>
       </div>
-
+ 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </PageWrapper>
   );
 };
+ 

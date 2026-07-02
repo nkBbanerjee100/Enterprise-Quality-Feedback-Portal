@@ -19,7 +19,7 @@ export const queryClient = new QueryClient({
 // Endpoints that are public by definition. A 401 here means "wrong
 // credentials" or "invalid refresh token" — not "your session expired" —
 // so they must never trigger the silent refresh-and-redirect flow below.
-const PUBLIC_AUTH_PATHS = ['/api/auth/login', '/api/auth/register', '/api/auth/refresh'];
+const PUBLIC_AUTH_PATHS = ['/api/auth/login', '/api/auth/register-self', '/api/auth/refresh'];
 const isPublicAuthRequest = (url?: string) =>
   !!url && PUBLIC_AUTH_PATHS.some((path) => url.includes(path));
 

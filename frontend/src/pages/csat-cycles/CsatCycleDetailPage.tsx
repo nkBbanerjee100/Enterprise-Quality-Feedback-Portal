@@ -408,6 +408,13 @@ export const CsatCycleDetailPage: React.FC = () => {
   // are accurate regardless of which display filter is active.
   // Always fetch ALL projects with no status filter — filtering is done client-side only.
   // This ensures summary counts are always accurate regardless of which tab is active.
+  // Eligibility status changes here (manager decisions, exemptions, etc.) are made
+  // by other users in other sessions. The global QueryClient default (5 min
+  // staleTime, no window-focus refetch) means a user who already had this page
+  // open — or returns to it within 5 minutes — was seeing a stale eligibility
+  // snapshot (e.g. still showing "Send to Manager" on a project the manager had
+  // already approved). Override the defaults for this specific query so it's
+  // always refetched on mount/focus and polled while the page is open.
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
     queryKey: ['cycle-projects', cycleId],
     queryFn: () => csatCyclesApi.listProjects(cycleId, {
@@ -416,6 +423,10 @@ export const CsatCycleDetailPage: React.FC = () => {
       limit: 500,
     }),
     enabled: !!cycleId,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchInterval: 20000, // keep eligibility/approval state in sync across users while the page is open
   });
 
   const invalidate = () => {
@@ -450,6 +461,16 @@ export const CsatCycleDetailPage: React.FC = () => {
   const isExemptedStatus = (s: string) =>
     s === 'exempted' || s === 'declined';
 
+  // True once a manager has made ANY final decision (approve or decline) on this
+  // project and it hasn't been manually re-set by Quality/Delivery/Sales since.
+  // The backend clears approved_or_declined_at whenever eligibility is manually
+  // (re-)set via the eligibility endpoint, so its presence here means "this row's
+  // current status is exactly what the manager decided" — i.e. it's final:
+  //   - eligible + decided  → only "Send Feedback" (no Mark Exempted)
+  //   - exempted + decided  → no actions at all (manager declined it; final)
+  //   - not decided (fresh) → the normal action set applies
+  const isManagerDecided = (p: EnrolledProject) => !!p.approved_or_declined_at;
+
   // Correct counts:
   const kpiEligible = (summary['eligible'] ?? 0) + (summary['approved'] ?? 0);
   const kpiExempted = (summary['exempted'] ?? 0) + (summary['declined'] ?? 0);
@@ -475,7 +496,7 @@ export const CsatCycleDetailPage: React.FC = () => {
 
   if (cycleLoading) return <PageWrapper><LoadingSpinner text="Loading cycle..." /></PageWrapper>;
 
-  const halfLabel = (c: any) => c?.half === 'H1' ? 'H1 — January to June' : 'H2 — July to December';
+  const halfLabel = (c: any) => c?.half === 'H1' ? 'H1 — April to September' : 'H2 — October to March';
 
   return (
     <PageWrapper>
@@ -656,7 +677,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                           {(project.eligibility_status === 'eligible' || project.eligibility_status === 'approved') && (
                             <button
                               onClick={() => navigate('/feedback/send', {
-                                state: { cycleId, projectId: project.project_id, enrollmentId: project.enrollment_id },
+                                state: { cycleId, projectId: Number(project.project_ext_id), enrollmentId: project.enrollment_id },
                               })}
                               className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white"
                               style={{ background: BRAND.green }}
@@ -665,7 +686,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                             </button>
                           )}
 
-                          {project.eligibility_status === 'eligible' && (
+                          {project.eligibility_status === 'eligible' && !isManager && !isManagerDecided(project) && (
                             <button
                               onClick={() => setExemptTarget(project)}
                               className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50"
@@ -674,7 +695,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                             </button>
                           )}
 
-                          {project.eligibility_status === 'exempted' && (
+                          {project.eligibility_status === 'exempted' && !isManager && !isManagerDecided(project) && (
                             <>
                               <button
                                 onClick={() => markEligibleMutation.mutate(project.enrollment_id)}
@@ -693,6 +714,12 @@ export const CsatCycleDetailPage: React.FC = () => {
                             </>
                           )}
 
+                          {/* Manager already declined this project — final state, no actions.
+                              (Manager-approved rows fall through to just "Send Feedback" above.) */}
+                          {project.eligibility_status === 'exempted' && !isManager && isManagerDecided(project) && (
+                            <span className="text-xs text-gray-300">—</span>
+                          )}
+
                           {project.eligibility_status === 'pending_approval' && isManager && (
                             <button
                               onClick={() => setApprovalTarget(project)}
@@ -703,6 +730,12 @@ export const CsatCycleDetailPage: React.FC = () => {
                             </button>
                           )}
 
+                          {isManager
+                            && project.eligibility_status !== 'pending_approval'
+                            && !(project.eligibility_status === 'eligible' || project.eligibility_status === 'approved')
+                            && (
+                              <span className="text-xs text-gray-300">—</span>
+                            )}
 
                         </div>
                       </td>

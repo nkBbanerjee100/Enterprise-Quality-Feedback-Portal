@@ -26,6 +26,9 @@ import { HomePage }         from './pages/home/HomePage';
 // Auth pages
 import { LoginPage }        from './pages/auth/LoginPage';
 import { RegisterPage }     from './pages/auth/RegisterPage';
+//import { ActivateAccountPage } from './pages/auth/ActivateAccountPage';
+import { AllowUserPage }    from './pages/auth/AllowUserPage';
+import { SelfRegisterPage } from './pages/auth/SelfRegisterPage';
 import { UnauthorizedPage } from './pages/auth/UnauthorizedPage';
 
 // Role dashboards
@@ -66,16 +69,23 @@ function App() {
           <Routes>
             {/* ── Public routes ─────────────────────────────────────────── */}
             <Route path="/login"           element={<LoginPage />} />
+            {/* //<Route path="/activate"        element={<ActivateAccountPage />} /> */}
+            <Route path="/register-self"   element={<SelfRegisterPage />} />
             <Route path="/unauthorized"    element={<UnauthorizedPage />} />
             <Route path="/survey/:token"   element={<CustomerSurveyPage />} />
 
-            {/* Register User — protected, Quality + Manager only */}
+            {/* Register — public. Anyone can land here, but the backend only
+                lets the registration succeed for emails already allow-listed
+                by Quality/Manager via the "Allow User" page/flow. */}
+            {/* <Route path="/register-self" element={<RegisterPage />} /> */}
+
+            {/* Allow User (email + role allow-list) — protected, Quality + Manager only */}
             <Route
-              path="/register"
+              path="/allow-user"
               element={
                 <ProtectedRoute>
                   <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER]}>
-                    <RegisterPage />
+                    <AllowUserPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
               }

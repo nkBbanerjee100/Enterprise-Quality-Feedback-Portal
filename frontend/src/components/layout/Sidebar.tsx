@@ -60,12 +60,7 @@ const NAV_ITEMS: NavItem[] = [
     icon:  '⬛',
     roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER],
   },
-  {
-    label: 'Users',
-    path:  ROUTES.ADMIN_USERS,
-    icon:  '⊙',
-    roles: [UserRole.QUALITY  ,UserRole.MANAGER],
-  },
+  
   {
     label: 'Audit Logs',
     path:  ROUTES.ADMIN_AUDIT_LOGS,
@@ -73,9 +68,9 @@ const NAV_ITEMS: NavItem[] = [
     roles: [UserRole.QUALITY  ,UserRole.MANAGER],
   },
   {
-    label: 'Register User',
-    path:  '/register',
-    icon:  '⊕',
+    label: 'Allow User',
+    path:  '/allow-user',
+    icon:  '✓',
     roles: [UserRole.QUALITY, UserRole.MANAGER],
   },
 ];

@@ -131,11 +131,17 @@ const TopNav: React.FC = () => {
             }}
           >Go to Dashboard →</button>
         ) : (
-          <Link to={ROUTES.LOGIN} style={{
-            padding: '9px 20px', background: G, color: '#fff',
-            borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: 'none',
-          }}>Sign in</Link>
-
+          <>
+            <Link to={ROUTES.REGISTER} style={{
+              padding: '9px 20px', background: 'transparent', color: G,
+              border: `1px solid ${G}`, borderRadius: 8, fontSize: 13,
+              fontWeight: 600, textDecoration: 'none',
+            }}>Sign up</Link>
+            <Link to={ROUTES.LOGIN} style={{
+              padding: '9px 20px', background: G, color: '#fff',
+              borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: 'none',
+            }}>Sign in</Link>
+          </>
         )}
       </div>
     </nav>

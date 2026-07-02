@@ -264,8 +264,13 @@ export const LoginPage: React.FC = () => {
               <div className="h-px flex-1 bg-[#D6D6D6]" />
             </div>
 
-            <p className="mt-6 text-center text-xs text-[#909090]">
-              Demo: admin@example.com / password
+           
+
+            <p className="mt-2 text-center text-sm text-[#3D3D3D]">
+              Email allow-listed by Quality/Management?{' '}
+              <Link to="/register-self" className="font-medium text-[#1A5C3A] hover:underline">
+                Register here
+              </Link>
             </p>
 
             <p className="mt-3 text-center text-xs leading-relaxed text-[#909090]">
