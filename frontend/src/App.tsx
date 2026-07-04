@@ -25,7 +25,7 @@ import { HomePage }         from './pages/home/HomePage';
 
 // Auth pages
 import { LoginPage }        from './pages/auth/LoginPage';
-import { RegisterPage }     from './pages/auth/RegisterPage';
+// import { RegisterPage }     from './pages/auth/RegisterPage';
 //import { ActivateAccountPage } from './pages/auth/ActivateAccountPage';
 import { AllowUserPage }    from './pages/auth/AllowUserPage';
 import { SelfRegisterPage } from './pages/auth/SelfRegisterPage';

@@ -25,20 +25,18 @@ TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 # ── Schemas ────────────────────────────────────────────────────────────────────
  
 class FeedbackRequestPayload(BaseModel):
-    projectId:      int
-    recipientEmail: str
-    recipientName:  str
-    csatCycleId:    Optional[int] = None
-    message:        Optional[str] = None
- 
- 
-class SurveyAnswer(BaseModel):
-    questionId: int
-    value:      str
- 
- 
+    projectId:           int
+    recipientEmail:      str
+    recipientName:       str
+    csatCycleId:         Optional[int] = None
+    message:             Optional[str] = None
+    periodOfPerformance: Optional[str] = None
+    pmAchievements:      Optional[str] = None
+
+
 class SurveySubmitPayload(BaseModel):
-    answers: list[SurveyAnswer]
+    # We now accept the entire form data as a JSON blob to match the new dynamic requirements
+    data: dict
  
  
 # ── Token helpers ──────────────────────────────────────────────────────────────
@@ -210,6 +208,8 @@ def list_feedback_requests(
             "status":         r.status,
             "createdAt":      r.created_at.isoformat() if r.created_at else None,
             "expiresAt":      r.expires_at.isoformat() if r.expires_at else None,
+            "periodOfPerformance": r.period_of_performance if hasattr(r, 'period_of_performance') else None,
+            "pmAchievements":      r.pm_achievements if hasattr(r, 'pm_achievements') else None,
         })
  
     return {"data": data, "total": total}
@@ -219,6 +219,7 @@ def list_feedback_requests(
 def create_feedback_request(
     payload: FeedbackRequestPayload,
     db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Send feedback request email + persist record to fact_feedback_request."""
@@ -239,19 +240,44 @@ def create_feedback_request(
     # status = "sent" if email went through, "pending" if SMTP failed
     record_status = "sent" if email_sent else "pending"
  
+    # Ensure project exists in dim_projects to satisfy foreign key constraint
+    dim_proj = db.execute(
+        text("SELECT id FROM dim_projects WHERE project_id = :pid LIMIT 1"),
+        {"pid": str(payload.projectId)}
+    ).fetchone()
+
+    if dim_proj:
+        internal_project_id = dim_proj.id
+    else:
+        tms_row = tms_db.execute(
+            text("SELECT Name FROM tsms_projects WHERE Id = :pid LIMIT 1"),
+            {"pid": payload.projectId}
+        ).fetchone()
+        project_name = tms_row.Name if tms_row else f"Project {payload.projectId}"
+        
+        db.execute(
+            text("INSERT INTO dim_projects (project_id, project_name, is_active) VALUES (:pid, :name, 0)"),
+            {"pid": str(payload.projectId), "name": project_name}
+        )
+        db.commit()
+        internal_project_id = db.execute(
+            text("SELECT id FROM dim_projects WHERE project_id = :pid LIMIT 1"),
+            {"pid": str(payload.projectId)}
+        ).fetchone().id
+
     try:
         db.execute(
             text("""
                 INSERT INTO fact_feedback_request
                     (csat_cycle_id, project_id, recipient_email, recipient_name,
-                     token, feedback_url, expires_at, request_sent_at, status, created_at)
+                     token, feedback_url, expires_at, request_sent_at, status, created_at, period_of_performance, pm_achievements)
                 VALUES
                     (:cycle_id, :project_id, :email, :name,
-                     :token, :url, :expires_at, :sent_at, :status, :created_at)
+                     :token, :url, :expires_at, :sent_at, :status, :created_at, :pop, :ach)
             """),
             {
-                "cycle_id":   payload.csatCycleId,
-                "project_id": payload.projectId,
+                "cycle_id":   payload.csatCycleId if payload.csatCycleId != 0 else None,
+                "project_id": internal_project_id,
                 "email":      payload.recipientEmail,
                 "name":       payload.recipientName,
                 "token":      token,
@@ -260,6 +286,8 @@ def create_feedback_request(
                 "sent_at":    now if email_sent else None,
                 "status":     record_status,
                 "created_at": now,
+                "pop":        payload.periodOfPerformance,
+                "ach":        payload.pmAchievements,
             },
         )
         db.commit()
@@ -287,13 +315,53 @@ def create_feedback_request(
 # ── Public survey endpoints (no auth, no DB) ───────────────────────────────────
  
 @router.get("/public/{token}")
-def get_survey_by_token(token: str):
+def get_survey_by_token(
+    token: str,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db)
+):
     """Validate token and return project context for the survey page."""
     payload = _verify_survey_token(token)
+    
+    # Defaults
+    customer_name = ""
+    period_of_performance = None
+    pm_achievements = None
+    project_name = f"Project #{payload['pid']}"
+    project_code = ""
+
+    try:
+        req_row = db.execute(
+            text("SELECT recipient_name, period_of_performance, pm_achievements, project_id FROM fact_feedback_request WHERE token = :token LIMIT 1"),
+            {"token": token},
+        ).fetchone()
+        
+        if req_row:
+            customer_name = req_row.recipient_name or ""
+            period_of_performance = req_row.period_of_performance
+            pm_achievements = req_row.pm_achievements
+            
+            # Now fetch project name and code from TMS
+            tms_row = tms_db.execute(
+                text("SELECT Name FROM tsms_projects WHERE Id = :pid LIMIT 1"),
+                {"pid": payload["pid"]}
+            ).fetchone()
+            if tms_row:
+                project_name = tms_row.Name
+                # Fallback to generating a code if none exists
+                project_code = getattr(tms_row, 'Code', f"PRJ-{payload['pid']}")
+    except Exception as e:
+        print(f"[WARN] Error fetching survey details: {e}")
+
     return {
-        "valid":     True,
-        "projectId": payload["pid"],
-        "email":     payload["email"],
+        "valid":               True,
+        "projectId":           payload["pid"],
+        "email":               payload["email"],
+        "customerName":        customer_name,
+        "projectName":         project_name,
+        "projectCode":         project_code,
+        "periodOfPerformance": period_of_performance,
+        "pmAchievements":      pm_achievements,
     }
  
  
@@ -314,21 +382,20 @@ def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(g
         if req_row:
             request_id = req_row.id
  
-            # Insert each answer
-            for answer in body.answers:
-                db.execute(
-                    text("""
-                        INSERT INTO fact_feedback_response
-                            (feedback_request_id, question_id, answer_value, submitted_at)
-                        VALUES
-                            (:request_id, :question_id, :answer_value, NOW())
-                    """),
-                    {
-                        "request_id":   request_id,
-                        "question_id":  answer.questionId,
-                        "answer_value": answer.value,
-                    },
-                )
+            # We dump the entire form structure as a JSON object into response_data
+            # for maximum flexibility with the new survey requirements.
+            db.execute(
+                text("""
+                    INSERT INTO fact_feedback_response
+                        (feedback_request_id, response_data, submitted_at)
+                    VALUES
+                        (:request_id, :data, NOW())
+                """),
+                {
+                    "request_id": request_id,
+                    "data":       json.dumps(body.data),
+                },
+            )
  
             # Mark request completed
             db.execute(
@@ -379,10 +446,10 @@ def get_request_responses(
  
     answers = db.execute(
         text("""
-            SELECT id, question_id, answer_value, submitted_at
+            SELECT id, response_data, submitted_at
             FROM fact_feedback_response
             WHERE feedback_request_id = :id
-            ORDER BY question_id ASC
+            ORDER BY id ASC
         """),
         {"id": request_id},
     ).fetchall()
@@ -398,11 +465,10 @@ def get_request_responses(
             "createdAt":      req.created_at.isoformat() if req.created_at else None,
             "requestSentAt":  req.request_sent_at.isoformat() if req.request_sent_at else None,
         },
-        "answers": [
+        "responses": [
             {
                 "id":          a.id,
-                "questionId":  a.question_id,
-                "answerValue": a.answer_value,
+                "data":        json.loads(a.response_data) if a.response_data else {},
                 "submittedAt": a.submitted_at.isoformat() if a.submitted_at else None,
             }
             for a in answers

@@ -24,6 +24,8 @@ class FeedbackRequest(Base):
     reminder_sent_at = Column(DateTime)
     status = Column(String(50), default="pending", nullable=False)  # pending, sent, completed
     created_at = Column(DateTime, server_default=func.now())
+    period_of_performance = Column(String(255), nullable=True)
+    pm_achievements = Column(Text, nullable=True)
 
     def __repr__(self):
         return f"<FeedbackRequest {self.recipient_email}>"

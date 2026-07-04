@@ -271,7 +271,7 @@ _ROLE_CONFIG: dict = {
 # POST /api/auth/register-self
 # ============================================================
 @router.post(
-    "/register-self",
+    "/register",
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Register new user",
