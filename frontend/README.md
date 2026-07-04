@@ -173,11 +173,14 @@ They are always nested: `ProtectedRoute` wraps `RoleProtectedRoute`.
 
 ## Key pages
 
+### CsatCycleListPage & Details (`/csat-cycles/*`)
+Manages periodic feedback evaluation cycles. Users can create a cycle (e.g., H1 2026), set timelines, and mass-enroll projects from TMS. 
+
 ### SendFeedbackPage (`/feedback/send`)
-A 3-step wizard: select a completed TMS project → enter recipient name + email + optional message → review and send. Navigating from a project detail page with `?project_id=X` pre-selects that project. On submit it calls `POST /api/feedback/requests`.
+A 3-step wizard: select a completed/enrolled TMS project → enter recipient name + email + optional message → review and send. Navigating from a project detail page with `?project_id=X` pre-selects that project and automatically computes the 'Period of Performance'. On submit it calls `POST /api/feedback/requests`.
 
 ### CustomerSurveyPage (`/survey/:token`)
-Fully public — no auth required. Renders the feedback form for a tokenized link sent to a customer. With no token in the URL it shows a "check your inbox" message. On submission it calls `POST /api/public/feedback/:token/submit`.
+Fully public — no auth required. Renders the feedback form for a tokenized link sent to a customer. With no token in the URL it shows a "check your inbox" message. Automatically connects back to the API securely via the token to pre-fill the form with `customerName`, `projectName`, `projectCode`, and `periodOfPerformance` while keeping them read-only for data integrity. On submission it calls `POST /api/feedback/public/:token/submit`.
 
 ### QualityUserDashboard (`/dashboard`)
 KPI cards (forms sent, submitted, pending, expired, avg CSAT, response rate), recent feedback requests table, quick Send Form card, and all-projects table. Data from `useDashboard()`, `useFeedbackRequests()`, and `useCompletedProjects()`.

@@ -7,12 +7,14 @@ import { api } from './client';
 import { FeedbackRequest, FeedbackResponse, FeedbackSubmission } from '../types/feedback.types';
 
 export interface CreateFeedbackRequestPayload {
-  projectId:      number;
-  recipientEmail: string;
-  recipientName:  string;
-  csatCycleId?:   number;   // optional until cycles are wired
-  message?:       string;   // personal note to include in the email
+  projectId:           number;
+  recipientEmail:      string;
+  recipientName:       string;
+  csatCycleId?:        number;   // optional until cycles are wired
+  message?:            string;   // personal note to include in the email
   cc?:            string[]; // additional emails CC'd on the feedback request
+  periodOfPerformance?: string;
+  pmAchievements?:      string;
 }
 
 export const feedbackApi = {
