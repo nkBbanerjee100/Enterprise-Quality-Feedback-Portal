@@ -6,89 +6,29 @@ import { useNavigate } from 'react-router-dom';
 import { PageWrapper } from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Pagination } from '../../components/common/Pagination';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { csatCyclesApi } from '../../api/csat-cycles.api';
 import { formatDate } from '../../utils/formatters';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
-import { CSATCycle } from '../../types/common.types';
-import CreateCycleModal from '../../components/CreateCycleModal';
 
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
-
-// ── Delete Confirmation Modal ─────────────────────────────────────────────────
-function DeleteCycleModal({
-  cycle,
-  onClose,
-  onConfirm,
-  isDeleting,
-}: {
-  cycle: CSATCycle;
-  onClose: () => void;
-  onConfirm: () => void;
-  isDeleting: boolean;
-}) {
-  const cycleName = cycle.cycle_name ?? cycle.cycleName ?? '—';
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-        <div className="px-6 py-4 bg-red-50 border-b border-red-100 flex justify-between items-center">
-          <div>
-            <h3 className="font-bold text-red-900">Remove CSAT Cycle</h3>
-            <p className="text-xs text-red-600 mt-0.5">{cycleName}</p>
-          </div>
-          <button onClick={onClose} className="text-red-400 hover:text-red-700 text-xl leading-none">×</button>
-        </div>
-        <div className="px-6 py-5 space-y-3">
-          <p className="text-sm text-gray-700">
-            Are you sure you want to remove <strong>{cycleName}</strong> from the portal?
-          </p>
-          <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-xs text-blue-800 space-y-1">
-            <p className="font-semibold">What happens:</p>
-            <p>• The cycle will no longer appear anywhere in the portal</p>
-            <p>• All associated data is retained in the database</p>
-            <p>• This can be reversed by the system admin if needed</p>
-          </div>
-        </div>
-        <div className="px-6 pb-5 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            disabled={isDeleting}
-            className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={isDeleting}
-            className="px-5 py-2 text-sm font-semibold rounded-lg text-white hover:opacity-90 disabled:opacity-50"
-            style={{ background: '#DC2626' }}
-          >
-            {isDeleting ? 'Deleting...' : 'Yes, Remove Cycle'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export const CsatCycleListPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const qc = useQueryClient();
   const [page, setPage] = useState(1);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<CSATCycle | null>(null);
   const [yearFilter, setYearFilter] = useState<number | null>(null);
   const [halfFilter, setHalfFilter] = useState<'H1' | 'H2' | null>(null);
   const pageSize = 10;
 
-  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGER;
-  const canDelete  = user?.role === UserRole.MANAGER;
+  // Only Quality and Management create cycles — Managers approve project
+  // additions but don't create cycles themselves.
+  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT;
 
   // Fetch ALL cycles (no is_active filter anymore)
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['csatCycles'],
     queryFn: () => csatCyclesApi.list(0, 50),
   });
@@ -125,14 +65,6 @@ export const CsatCycleListPage: React.FC = () => {
 
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
 
-  const deleteMutation = useMutation({
-    mutationFn: (cycleId: number) => csatCyclesApi.deleteCycle(cycleId),
-    onSuccess: () => {
-      setDeleteTarget(null);
-      qc.invalidateQueries({ queryKey: ['csatCycles'] });
-    },
-  });
-
   const clearFilters = () => { setYearFilter(null); setHalfFilter(null); setPage(1); };
   const hasFilter = yearFilter !== null || halfFilter !== null;
 
@@ -150,11 +82,11 @@ export const CsatCycleListPage: React.FC = () => {
           </div>
           {canManage && (
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => navigate('/csat-cycles/select-projects')}
               style={{ background: BRAND.green }}
               className="px-4 py-2 text-white rounded-lg hover:opacity-90 text-sm font-medium flex items-center gap-2"
             >
-              <span className="text-lg leading-none">+</span> New Cycle
+              Select Projects for New Cycle
             </button>
           )}
         </div>
@@ -248,7 +180,7 @@ export const CsatCycleListPage: React.FC = () => {
                     Clear filters
                   </button>
                 ) : canManage && (
-                  <p className="text-sm mt-1">Click "New Cycle" to create one</p>
+                  <p className="text-sm mt-1">Click "Select Projects for New Cycle" to create one</p>
                 )}
               </div>
             ) : (
@@ -307,20 +239,6 @@ export const CsatCycleListPage: React.FC = () => {
                           >
                             Manage Projects →
                           </button>
-                          {canDelete && (
-                            <button
-                              onClick={() => setDeleteTarget(cycle)}
-                              className="p-1.5 rounded-lg border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition"
-                              title="Delete cycle"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                                <path d="M10 11v6M14 11v6" />
-                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                              </svg>
-                            </button>
-                          )}
                         </div>
                       </td>
 
@@ -341,22 +259,6 @@ export const CsatCycleListPage: React.FC = () => {
           />
         )}
       </div>
-
-      {showCreateModal && (
-        <CreateCycleModal
-          onClose={() => setShowCreateModal(false)}
-          onCreated={() => { setShowCreateModal(false); refetch(); }}
-        />
-      )}
-
-      {deleteTarget && (
-        <DeleteCycleModal
-          cycle={deleteTarget}
-          onClose={() => setDeleteTarget(null)}
-          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
-          isDeleting={deleteMutation.isPending}
-        />
-      )}
     </PageWrapper>
   );
 };

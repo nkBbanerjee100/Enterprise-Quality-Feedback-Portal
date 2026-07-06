@@ -7,6 +7,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
+import { NotificationBell } from '../common/NotificationBell';
 
 export const Navbar: React.FC = () => {
   const navigate         = useNavigate();
@@ -44,6 +45,8 @@ export const Navbar: React.FC = () => {
 
       {/* Right: name + avatar + sign out */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <NotificationBell />
+
         {fullName && (
           <span style={{ fontSize: '13px', color: '#4A6B55', fontWeight: 500 }}>
             {fullName}

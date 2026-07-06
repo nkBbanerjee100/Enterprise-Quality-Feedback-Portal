@@ -13,6 +13,7 @@ import { useFeedbackRequests } from '../../hooks/useFeedback';
 import { useCompletedProjects } from '../../hooks/useProjects';
 import { ROUTES, BRAND } from '../../utils/constants';
 import { TMSProject } from '../../types/project.types';
+import { UserRole } from '../../types/auth.types';
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 const STATUS_META: Record<string, { label: string; bg: string; color: string; dot: string }> = {
@@ -385,7 +386,9 @@ export const QualityUserDashboard: React.FC = () => {
         {/* Right column: quick action + status guide */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-          {/* Send form card */}
+          {/* Send form card — Quality/Management (+ Delivery/Sales); Manager
+              has a separate plan for this, not yet built. */}
+          {user?.role !== UserRole.MANAGER && (
           <div style={{
             background: BRAND.green,
             borderRadius: 12,
@@ -427,6 +430,7 @@ export const QualityUserDashboard: React.FC = () => {
               {Icon.send} Send Form
             </button>
           </div>
+          )}
 
           {/* Status guide */}
           <div style={{

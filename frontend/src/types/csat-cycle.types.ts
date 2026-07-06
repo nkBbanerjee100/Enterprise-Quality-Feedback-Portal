@@ -11,6 +11,11 @@ export type EligibilityStatus =
 
 export type CycleHalf = 'H1' | 'H2';
 
+// Separate from EligibilityStatus — gates the act of adding a project to a
+// cycle at all. Set when Quality/Management enrolls a project; Management
+// or that project's Manager (PM) must approve/decline it.
+export type AdditionApprovalStatus = 'pending' | 'approved' | 'declined';
+
 export interface EnrolledProject {
   enrollment_id: number;
   project_id: number;
@@ -24,6 +29,19 @@ export interface EnrolledProject {
   approval_requested_at?: string;
   manager_remarks?: string;
   approved_or_declined_at?: string;
+
+  // ── Addition-approval (separate from the exemption flow above) ─────────
+  addition_approval_status: AdditionApprovalStatus;
+  addition_approved_by?: string;
+  addition_approved_at?: string;
+  addition_decision_remarks?: string;
+  project_manager_emp_id?: string;
+  project_manager_name?: string;
+  can_approve_addition: boolean;   // computed server-side for the current user
+}
+
+export interface DeclineAdditionRequest {
+  remarks?: string;
 }
 
 export interface CycleProjectsResponse {
@@ -67,4 +85,16 @@ export const ELIGIBILITY_COLORS: Record<EligibilityStatus, { bg: string; text: s
   pending_approval: { bg: '#DBEAFE', text: '#1E40AF', border: '#60A5FA' },
   approved:         { bg: '#D1FAE5', text: '#065F46', border: '#10B981' },
   declined:         { bg: '#FEE2E2', text: '#991B1B', border: '#F87171' },
+};
+
+export const ADDITION_APPROVAL_LABELS: Record<AdditionApprovalStatus, string> = {
+  pending:  'Pending Addition Approval',
+  approved: 'Addition Approved',
+  declined: 'Addition Declined',
+};
+
+export const ADDITION_APPROVAL_COLORS: Record<AdditionApprovalStatus, { bg: string; text: string; border: string }> = {
+  pending:  { bg: '#FDF6E3', text: '#9B7C2A', border: '#EACD82' },
+  approved: { bg: '#D1FAE5', text: '#065F46', border: '#34D399' },
+  declined: { bg: '#FEE2E2', text: '#991B1B', border: '#F87171' },
 };

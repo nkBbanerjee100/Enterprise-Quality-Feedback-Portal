@@ -16,6 +16,7 @@ const ROLE_HOME: Record<string, string> = {
   [UserRole.QUALITY]:           '/dashboard',
   [UserRole.DELIVERY]:            '/dashboard',
   [UserRole.MANAGER]:            '/dashboard',
+  [UserRole.MANAGEMENT]:            '/dashboard',
   [UserRole.SALES]:         '/reports',
   [UserRole.CUSTOMER]:                '/unauthorized',
 };
@@ -77,12 +78,7 @@ export const LoginPage: React.FC = () => {
           </span>
           </Link>
         </div>
-        <a
-          href="https://www.mindteck.com/"
-          className="rounded-full border border-[#D6D6D6] px-5 py-2 text-sm font-medium text-[#1A1A1A] shadow-sm transition hover:-translate-y-0.5 hover:border-[#909090] hover:shadow-md"
-        >
-          Visit Mindteck
-        </a>
+       
       </header>
 
       {/* Main content */}

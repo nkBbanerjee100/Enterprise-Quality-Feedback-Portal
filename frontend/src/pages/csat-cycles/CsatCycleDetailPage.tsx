@@ -1,7 +1,7 @@
 /**
  * CSAT Cycle Detail Page
  */
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageWrapper } from '../../components/layout/PageWrapper';
@@ -10,43 +10,120 @@ import { csatCyclesApi } from '../../api/csat-cycles.api';
 import { projectsApi } from '../../api/projects.api';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
-import {
-  EnrolledProject, EligibilityStatus,
-  ELIGIBILITY_LABELS, ELIGIBILITY_COLORS,
-} from '../../types/csat-cycle.types';
+import { EnrolledProject } from '../../types/csat-cycle.types';
 import { formatDate } from '../../utils/formatters';
 import { deriveStatus } from '../projects/ProjectListPage';
+import { currentHalf, precedingHalf, halfDates } from '../../utils/half-year';
 
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 
-type EligFilter = 'all' | EligibilityStatus;
+// ─── Unified row status ─────────────────────────────────────────────────────
+// A project row has two underlying flags — addition_approval_status and
+// eligibility_status — but a person looking at this page just wants to know
+// one thing: "what's happening with this project right now, and is there
+// anything I need to do about it". This collapses both into a single status
+// people can scan, with the addition-approval gate taking priority (a
+// project that hasn't even been confirmed into the cycle yet doesn't need
+// its eligibility surfaced too).
+type RowStatus = 'review' | 'ready' | 'not-eligible';
 
-// ─── Badge ────────────────────────────────────────────────────────────────────
-function EligibilityBadge({ status }: { status: EligibilityStatus }) {
-  const c = ELIGIBILITY_COLORS[status];
+function getRowStatus(p: EnrolledProject): RowStatus {
+  if (p.addition_approval_status === 'pending') return 'review';
+  if (p.eligibility_status === 'eligible' || p.eligibility_status === 'approved') return 'ready';
+  if (p.eligibility_status === 'pending_approval') return 'review';  // merged — "With manager" removed as its own bucket
+  return 'not-eligible'; // exempted, declined
+}
+
+const ROW_STATUS_META: Record<RowStatus, { label: string; bg: string; text: string; bar: string }> = {
+  review:       { label: 'Awaiting approval', bg: '#FDF6E3', text: '#9B7C2A', bar: '#F59E0B' },
+  ready:        { label: 'Ready',              bg: '#E8F2EC', text: '#1A5C3A', bar: '#059669' },
+  'not-eligible': { label: 'Not eligible',     bg: '#F3F4F6', text: '#6B7280', bar: '#D1D5DB' },
+};
+
+// label defaults to the status's neutral copy, but callers can override it —
+// used for the 'review' status, where the copy should only say "needs YOUR
+// review" for the person who can actually act on it (Management, or the
+// project's own Manager). Everyone else sees "Awaiting approval" instead,
+// since showing them a call to action they're not permitted to complete
+// (Quality can never approve/decline an addition — see can_approve_addition)
+// is actively misleading, not just imprecise.
+function RowStatusBadge({ status, label }: { status: RowStatus; label?: string }) {
+  const m = ROW_STATUS_META[status];
   return (
     <span
-      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border"
-      style={{ background: c.bg, color: c.text, borderColor: c.border }}
+      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap"
+      style={{ background: m.bg, color: m.text }}
     >
-      {ELIGIBILITY_LABELS[status]}
+      {label ?? m.label}
     </span>
   );
 }
 
+// ─── Row overflow menu — secondary actions that shouldn't compete with the
+// row's one primary button (e.g. "Mark exempted" alongside "Send feedback") ──
+function RowMenu({ items }: { items: { label: string; onClick: () => void; disabled?: boolean }[] }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-label="More options"
+        className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+      >
+        <i className="ti ti-dots" style={{ fontSize: 16 }} />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-10"
+          style={{ minWidth: 170 }}
+        >
+          {items.map(item => (
+            <button
+              key={item.label}
+              onClick={() => { item.onClick(); setOpen(false); }}
+              disabled={item.disabled}
+              className="w-full text-left px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 whitespace-nowrap"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Enroll Modal ─────────────────────────────────────────────────────────────
+// Completed projects shown here are ones completed in the half-year
+// immediately before the one we're in TODAY (see utils/half-year.ts) — not
+// the cycle's own (often future, e.g. an upcoming H2) date window. A
+// project can't have "completed" during a cycle that hasn't happened yet —
+// that's what caused this to show 0 completed projects before this fix.
+
 function EnrollModal({
-  cycleId, enrolledIds, onClose, onDone, cycleStartDate, cycleEndDate,
+  cycleId, enrolledIds, onClose, onDone, onTriaged,
 }: {
   cycleId: number; enrolledIds: Set<number>; onClose: () => void; onDone: () => void;
-  cycleStartDate: string | null;   // e.g. "2025-07-01T00:00:00"
-  cycleEndDate: string | null;     // e.g. "2025-12-31T23:59:59"
+  onTriaged: () => void;   // refresh the parent's enrolled set without closing the modal
 }) {
+  const { user } = useAuthStore();
+  const isManagement = user?.role === UserRole.MANAGEMENT;
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [tally, setTally] = useState({ eligible: 0, not_sure: 0, exempted: 0 });
 
-  // FIX 1: include enrolledIds.size in query key so the list refreshes
-  // whenever the enrolled set changes (after a successful enrollment).
   const { data, isLoading } = useQuery({
     queryKey: ['projects-for-enroll', enrolledIds.size],
     queryFn: () => projectsApi.list(0, 500),
@@ -61,24 +138,22 @@ function EnrollModal({
     );
     const active: any[] = [];
     const completed: any[] = [];
-    const cycleStart = cycleStartDate ? new Date(cycleStartDate) : null;
-    const cycleEnd   = cycleEndDate   ? new Date(cycleEndDate)   : null;
+
+    const today = new Date();
+    const cur = currentHalf(today);
+    const prev = precedingHalf(cur.year, cur.half);
+    const [windowStart, windowEnd] = halfDates(prev.year, prev.half);
+
     for (const p of available) {
       const status = deriveStatus(p.end_date ?? null);
       if (status === 'active' || status === 'testing') {
         active.push(p);
-      } else {
-         if (cycleStart && cycleEnd && p.end_date) {
-      const projectEnd = new Date(p.end_date);
-      if (projectEnd >= cycleStart && projectEnd <= cycleEnd) {
-        completed.push(p);
-      }
-      // else: completed outside this cycle's window — don't show
-      }
-         // if cycle dates unknown, fall back to showing all completed (safe default)
-        else if (!cycleStart || !cycleEnd) {
-      completed.push(p);
+      } else if (p.end_date) {
+        const projectEnd = new Date(p.end_date);
+        if (projectEnd >= windowStart && projectEnd <= windowEnd) {
+          completed.push(p);
         }
+        // else: completed outside the preceding-half window — don't show
       }
     }
     active.sort((a, b) => a.project_name.localeCompare(b.project_name));
@@ -88,17 +163,56 @@ function EnrollModal({
 
   const totalFiltered = activeProjects.length + completedProjects.length;
 
-  const mutation = useMutation({
-    mutationFn: () => csatCyclesApi.enrollProjects(cycleId, { tms_project_ids: [...selected] }),
-    onSuccess: onDone,
-  });
+  // Enroll first (creates the cycle_project_enrollment row — still goes
+  // through the existing addition-approval flow to Management/PM exactly
+  // as before), then look up the enrollment_id that came out of it so we
+  // can immediately apply the triage decision on top of it.
+  const [lastAction, setLastAction] = useState<{ id: number; name: string; action: 'eligible' | 'not_sure' | 'exempted' } | null>(null);
 
-  const toggle = (id: number) => {
-    setSelected(prev => {
-      const s = new Set(prev);
-      s.has(id) ? s.delete(id) : s.add(id);
-      return s;
-    });
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const triage = async (tmsProjectId: number, projectName: string, action: 'eligible' | 'not_sure' | 'exempted') => {
+    setBusyId(tmsProjectId);
+    setErrorMsg(null);
+    try {
+      await csatCyclesApi.enrollProjects(cycleId, { tms_project_ids: [tmsProjectId] });
+
+      // Eligible/Exempt are already a real decision by whoever's adding the
+      // project — approve the addition itself immediately instead of
+      // leaving it stuck behind a second, redundant approval gate that
+      // would otherwise mask this choice entirely (every fresh enrollment
+      // starts addition_approval_status='pending', which getRowStatus()
+      // checks BEFORE eligibility_status — so without this, every row would
+      // show "Needs review" no matter what was picked here).
+      //
+      // "Not sure" is the one case that should genuinely stay pending —
+      // that's what routes it to Management/the project's Manager to
+      // resolve via the existing approve/decline-addition flow, which is
+      // exactly what "Needs review" already means on the main page.
+      if (action !== 'not_sure') {
+        const list = await csatCyclesApi.listProjects(cycleId, { project_status: 'all', limit: 500 });
+        const enrolled = list.data.find(p => Number(p.project_ext_id) === tmsProjectId);
+        if (enrolled) {
+          await csatCyclesApi.approveAddition(cycleId, enrolled.enrollment_id);
+          if (action === 'exempted') {
+            await csatCyclesApi.setEligibility(cycleId, enrolled.enrollment_id, { eligibility_status: 'exempted' });
+          }
+        }
+      }
+      // Immediate feedback — don't wait on the refetch (which can lag a
+      // beat behind the click) to show that something actually happened.
+      setTally(prev => ({ ...prev, [action]: prev[action] + 1 }));
+      setLastAction({ id: tmsProjectId, name: projectName, action });
+      onTriaged(); // refreshes enrolledIds — row disappears from this list once that resolves
+    } catch (err) {
+      // This previously had no catch at all — the promise rejection just
+      // vanished silently, leaving the row looking untouched with no
+      // indication anything had gone wrong.
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setErrorMsg(detail || `Couldn't update "${projectName}". Please try again.`);
+    } finally {
+      setBusyId(null);
+    }
   };
 
   return (
@@ -117,8 +231,30 @@ function EnrollModal({
             onChange={e => setSearch(e.target.value)}
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
           />
-          {selected.size > 0 && (
-            <p className="text-xs text-green-700 mt-2 font-medium">{selected.size} project(s) selected</p>
+
+          {/* Live tally — updates the instant an action succeeds, not just
+              after "Done" is clicked. Also confirms the most recent action
+              by name, since a busy network tick can make the row's own
+              disappearance feel disconnected from the click that caused it. */}
+          <div className="flex items-center justify-between mt-3 mb-1 flex-wrap gap-y-1">
+            <div className="flex items-center gap-3 text-xs font-semibold">
+              <span className={tally.eligible > 0 ? 'text-green-700' : 'text-gray-300'}>✓ {tally.eligible} Eligible</span>
+              <span className={tally.not_sure > 0 ? 'text-blue-700' : 'text-gray-300'}>? {tally.not_sure} Not sure</span>
+              <span className={tally.exempted > 0 ? 'text-gray-600' : 'text-gray-300'}>✕ {tally.exempted} Exempt</span>
+            </div>
+            {lastAction && (
+              <span className="text-xs text-gray-400 truncate max-w-[220px]">
+                Last: <span className="font-medium text-gray-600">{lastAction.name}</span> → {
+                  lastAction.action === 'eligible' ? 'Eligible' : lastAction.action === 'not_sure' ? 'Sent to Management' : 'Exempted'
+                }
+              </span>
+            )}
+          </div>
+
+          {errorMsg && (
+            <div className="mb-2 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg">
+              {errorMsg}
+            </div>
           )}
         </div>
 
@@ -140,26 +276,37 @@ function EnrollModal({
                     </span>
                   </div>
                   {activeProjects.map((p: any) => (
-                    <label
-                      key={p.project_id}
-                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
-                        selected.has(p.project_id) ? 'bg-green-50 border border-green-200' : 'hover:bg-gray-50 border border-transparent'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selected.has(p.project_id)}
-                        onChange={() => toggle(p.project_id)}
-                        className="accent-green-700"
-                      />
+                    <div key={p.project_id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{p.project_name}</p>
                         <p className="text-xs text-gray-400">ID: {p.project_id}</p>
                       </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">
-                        Active
-                      </span>
-                    </label>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          disabled={busyId === p.project_id}
+                          onClick={() => triage(p.project_id, p.project_name, 'eligible')}
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                        >
+                          ✓ Eligible
+                        </button>
+                        {!isManagement && (
+                          <button
+                            disabled={busyId === p.project_id}
+                            onClick={() => triage(p.project_id, p.project_name, 'not_sure')}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ? Not sure
+                          </button>
+                        )}
+                        <button
+                          disabled={busyId === p.project_id}
+                          onClick={() => triage(p.project_id, p.project_name, 'exempted')}
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                        >
+                          ✕ Exempt
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </>
               )}
@@ -183,26 +330,42 @@ function EnrollModal({
                     </div>
                   )}
                   {completedProjects.map((p: any) => (
-                    <label
-                      key={p.project_id}
-                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
-                        selected.has(p.project_id) ? 'bg-gray-50 border border-gray-300' : 'hover:bg-gray-50 border border-transparent'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selected.has(p.project_id)}
-                        onChange={() => toggle(p.project_id)}
-                        className="accent-gray-500"
-                      />
+                    <div key={p.project_id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-500 truncate">{p.project_name}</p>
-                        <p className="text-xs text-gray-400">ID: {p.project_id}</p>
+                        <p className="text-xs text-gray-400">
+                          ID: {p.project_id}
+                          {p.end_date && (
+                            <> · Completed {new Date(p.end_date).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</>
+                          )}
+                        </p>
                       </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">
-                        Completed
-                      </span>
-                    </label>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          disabled={busyId === p.project_id}
+                          onClick={() => triage(p.project_id, p.project_name, 'eligible')}
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                        >
+                          ✓ Eligible
+                        </button>
+                        {!isManagement && (
+                          <button
+                            disabled={busyId === p.project_id}
+                            onClick={() => triage(p.project_id, p.project_name, 'not_sure')}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ? Not sure
+                          </button>
+                        )}
+                        <button
+                          disabled={busyId === p.project_id}
+                          onClick={() => triage(p.project_id, p.project_name, 'exempted')}
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                        >
+                          ✕ Exempt
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </>
               )}
@@ -210,77 +373,18 @@ function EnrollModal({
           )}
         </div>
 
-        <div className="px-5 py-4 flex justify-end gap-3 border-t border-gray-100 flex-shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-            Cancel
-          </button>
+        <div className="px-5 py-4 flex justify-between items-center border-t border-gray-100 flex-shrink-0">
+          <span className="text-xs text-gray-400">
+            {tally.eligible + tally.not_sure + tally.exempted > 0
+              ? 'All changes above are already saved.'
+              : 'Each button takes effect immediately — nothing to submit.'}
+          </span>
           <button
-            onClick={() => mutation.mutate()}
-            disabled={selected.size === 0 || mutation.isPending}
+            onClick={onDone}
             style={{ background: BRAND.green }}
-            className="px-5 py-2 text-sm text-white font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
+            className="px-5 py-2 text-sm text-white font-semibold rounded-lg hover:opacity-90"
           >
-            {mutation.isPending ? 'Enrolling...' : `Enroll ${selected.size > 0 ? selected.size : ''} Project(s)`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Exemption Modal ───────────────────────────────────────────────────────────
-function ExemptionModal({
-  project, cycleId, onClose, onDone,
-}: {
-  project: EnrolledProject; cycleId: number; onClose: () => void; onDone: () => void;
-}) {
-  const [reason, setReason] = useState(project.exemption_reason ?? '');
-
-  const mutation = useMutation({
-    mutationFn: () => csatCyclesApi.setEligibility(cycleId, project.enrollment_id, {
-      eligibility_status: 'exempted',
-      exemption_reason: reason,
-    }),
-    onSuccess: onDone,
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-        <div className="px-6 py-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
-          <div>
-            <h3 className="font-bold text-amber-900">Mark as Not Eligible / Exempted</h3>
-            <p className="text-xs text-amber-700 mt-0.5">{project.project_name}</p>
-          </div>
-          <button onClick={onClose} className="text-amber-700 hover:text-amber-900 text-xl">×</button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          <p className="text-sm text-gray-600">
-            This project will be marked as <strong>not eligible</strong> for this cycle.
-            You can optionally send it to a manager for override approval.
-          </p>
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Reason for Exemption</label>
-            <textarea
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              rows={3}
-              placeholder="Why is this project not eligible for CSAT review?"
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
-            />
-          </div>
-        </div>
-        <div className="px-6 pb-5 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-            Cancel
-          </button>
-          <button
-            onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
-            className="px-5 py-2 text-sm font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
-            style={{ background: '#D97706', color: '#fff' }}
-          >
-            {mutation.isPending ? 'Saving...' : 'Mark as Exempted'}
+            Close
           </button>
         </div>
       </div>
@@ -382,6 +486,98 @@ function ManagerDecisionModal({
   );
 }
 
+// ─── Addition Decision Modal (separate from the exemption ManagerDecisionModal
+// above — this decides whether a newly-added project stays in the cycle) ──────
+function AdditionDecisionModal({
+  project, cycleId, onClose, onDone,
+}: {
+  project: EnrolledProject; cycleId: number; onClose: () => void; onDone: () => void;
+}) {
+  const [decision, setDecision] = useState<'approved' | 'declined' | null>(null);
+  const [remarks, setRemarks] = useState('');
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      decision === 'approved'
+        ? csatCyclesApi.approveAddition(cycleId, project.enrollment_id)
+        : csatCyclesApi.declineAddition(cycleId, project.enrollment_id, { remarks }),
+    onSuccess: onDone,
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+        <div className="px-6 py-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
+          <div>
+            <h3 className="font-bold text-amber-900">Approve Project Addition</h3>
+            <p className="text-xs text-amber-700 mt-0.5">{project.project_name}</p>
+          </div>
+          <button onClick={onClose} className="text-amber-700 hover:text-amber-900 text-xl">×</button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <p className="text-sm text-gray-600">
+            This project was just added to the cycle and is awaiting your decision.<br />
+            <strong>Approve</strong> to confirm it belongs in this cycle.<br />
+            <strong>Decline</strong> to reject the addition.
+          </p>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => setDecision('approved')}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
+                decision === 'approved'
+                  ? 'border-green-500 bg-green-50 text-green-800'
+                  : 'border-gray-200 text-gray-600 hover:border-green-300'
+              }`}
+            >
+              ✓ Approve
+            </button>
+            <button
+              onClick={() => setDecision('declined')}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
+                decision === 'declined'
+                  ? 'border-red-400 bg-red-50 text-red-800'
+                  : 'border-gray-200 text-gray-600 hover:border-red-300'
+              }`}
+            >
+              ✕ Decline
+            </button>
+          </div>
+
+          {decision === 'declined' && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">Reason (optional)</label>
+              <textarea
+                value={remarks}
+                onChange={e => setRemarks(e.target.value)}
+                rows={2}
+                placeholder="Why is this addition being declined?"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none"
+              />
+            </div>
+          )}
+        </div>
+        <div className="px-6 pb-5 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+            Cancel
+          </button>
+          <button
+            onClick={() => mutation.mutate()}
+            disabled={!decision || mutation.isPending}
+            className="px-5 py-2 text-sm font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
+            style={{
+              background: decision === 'approved' ? '#059669' : decision === 'declined' ? '#DC2626' : '#9CA3AF',
+              color: '#fff',
+            }}
+          >
+            {mutation.isPending ? 'Submitting...' : 'Submit Decision'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export const CsatCycleDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -390,14 +586,26 @@ export const CsatCycleDetailPage: React.FC = () => {
   const { user } = useAuthStore();
   const cycleId = Number(id);
 
+  // NOTE: MANAGEMENT was previously missing here even though the backend
+  // already permits MANAGEMENT for these actions — without it, Management
+  // would never see the Actions column at all, including the new
+  // "Approve Addition" button. Added to match actual backend permissions.
   const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGER
-    || user?.role === UserRole.DELIVERY || user?.role === UserRole.SALES;
+    || user?.role === UserRole.DELIVERY || user?.role === UserRole.SALES
+    || user?.role === UserRole.MANAGEMENT;
   const isManager = user?.role === UserRole.MANAGER;
+  // Only Quality and Management add projects to a cycle — Managers approve
+  // additions but don't initiate them.
+  const canAddProjects = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT;
+  // Send Feedback is Quality/Management (+ Delivery/Sales, unchanged) — not
+  // Manager, who has a separate plan for this, not yet built.
+  const canSendFeedback = canManage && !isManager;
 
-  const [eligFilter, setEligFilter] = useState<EligFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | RowStatus>('all');
+  const [showHowThisWorks, setShowHowThisWorks] = useState(false);
   const [enrollModal, setEnrollModal] = useState(false);
-  const [exemptTarget, setExemptTarget] = useState<EnrolledProject | null>(null);
   const [approvalTarget, setApprovalTarget] = useState<EnrolledProject | null>(null);
+  const [additionTarget, setAdditionTarget] = useState<EnrolledProject | null>(null);
 
   const { data: cycle, isLoading: cycleLoading } = useQuery({
     queryKey: ['csat-cycle', cycleId],
@@ -453,14 +661,6 @@ export const CsatCycleDetailPage: React.FC = () => {
     [allProjects],
   );
 
-  // FIX 2: Summary is computed from the full dataset (eligFilter='all' fetch),
-  // so declined projects are NEVER lumped into exempted.
-  const summary = projectsData?.summary ?? {} as Partial<Record<EligibilityStatus, number>>;
-
-  // 'declined' is treated as exempted in the UI (legacy rows + manager-declined rows)
-  const isExemptedStatus = (s: string) =>
-    s === 'exempted' || s === 'declined';
-
   // True once a manager has made ANY final decision (approve or decline) on this
   // project and it hasn't been manually re-set by Quality/Delivery/Sales since.
   // The backend clears approved_or_declined_at whenever eligibility is manually
@@ -471,32 +671,44 @@ export const CsatCycleDetailPage: React.FC = () => {
   //   - not decided (fresh) → the normal action set applies
   const isManagerDecided = (p: EnrolledProject) => !!p.approved_or_declined_at;
 
-  // Correct counts:
-  const kpiEligible = (summary['eligible'] ?? 0) + (summary['approved'] ?? 0);
-  const kpiExempted = (summary['exempted'] ?? 0) + (summary['declined'] ?? 0);
-  const kpiPending  = summary['pending_approval'] ?? 0;
-  // Total from summary (always accurate regardless of current filter)
-  const kpiTotal = Object.values(summary).reduce((acc, v) => acc + (v ?? 0), 0);
+  // Counts per unified status, computed from the full unfiltered dataset so
+  // they stay accurate regardless of which filter pill is currently active.
+  const statusCounts = useMemo(() => {
+    const counts: Record<RowStatus, number> = { review: 0, ready: 0, 'not-eligible': 0 };
+    allProjects.forEach(p => { counts[getRowStatus(p)]++; });
+    return counts;
+  }, [allProjects]);
+  const kpiTotal = allProjects.length;
 
-  // Client-side filtering — eligible tab shows eligible+approved, exempted shows exempted+declined
-  const isEligibleStatus = (s: string) => s === 'eligible' || s === 'approved';
-
-  const displayedProjects = eligFilter === 'all'
+  const displayedProjects = statusFilter === 'all'
     ? allProjects
-    : eligFilter === 'eligible'
-      ? allProjects.filter(p => isEligibleStatus(p.eligibility_status))
-      : eligFilter === 'exempted'
-        ? allProjects.filter(p => isExemptedStatus(p.eligibility_status))
-        : allProjects.filter(p => p.eligibility_status === eligFilter);
-
-  const eligibleProjects = allProjects.filter(
-    p => p.eligibility_status === 'eligible' || p.eligibility_status === 'approved',
-  );
-  const exemptedProjects = allProjects.filter(p => isExemptedStatus(p.eligibility_status)); // exempted + declined only
+    : allProjects.filter(p => getRowStatus(p) === statusFilter);
 
   if (cycleLoading) return <PageWrapper><LoadingSpinner text="Loading cycle..." /></PageWrapper>;
 
   const halfLabel = (c: any) => c?.half === 'H1' ? 'H1 — April to September' : 'H2 — October to March';
+
+  // Per-row subtitle — the plain-language explanation that replaces the old
+  // second badge and the permanent workflow banner.
+  const rowSubtitle = (p: EnrolledProject, status: RowStatus): string => {
+    if (status === 'review') {
+      if (p.addition_approval_status === 'pending') {
+        return p.project_manager_name
+          ? `Added ${formatDate(p.enrolled_at)} · PM ${p.project_manager_name}`
+          : `Added ${formatDate(p.enrolled_at)} · no manager assigned`;
+      }
+      // Addition already resolved — this row is here because eligibility
+      // itself was escalated to a manager (the old "With manager" case).
+      return 'Sent for manager approval · awaiting decision';
+    }
+    if (status === 'ready') {
+      return `Ready · added ${formatDate(p.enrolled_at)}`;
+    }
+    // not-eligible
+    if (isManagerDecided(p)) return 'Manager declined · marked not eligible';
+    if (p.exemption_reason) return p.exemption_reason;
+    return 'Marked not eligible';
+  };
 
   return (
     <PageWrapper>
@@ -542,36 +754,50 @@ export const CsatCycleDetailPage: React.FC = () => {
               )}
             </div>
 
-            {/* KPI row — FIX 2: declined shown separately, not lumped into exempted */}
+            {/* KPI row — click a stat to jump to that filter */}
             <div className="flex gap-3 flex-wrap">
-              {[
-                { label: 'Total',    value: kpiTotal,    color: '#6B7280' },
-                { label: 'Eligible', value: kpiEligible, color: '#059669' },
-                { label: 'Exempted', value: kpiExempted, color: '#D97706' },
-                { label: 'Pending',  value: kpiPending,  color: '#3B82F6' },
-              ].map(kpi => (
-                <div key={kpi.label} className="text-center px-4 py-2 bg-gray-50 rounded-xl border border-gray-100 min-w-[70px]">
+              {([
+                { label: 'Total',              value: kpiTotal,                     color: '#6B7280', filter: 'all' as const },
+                { label: 'Needs review',        value: statusCounts.review,          color: '#9B7C2A', filter: 'review' as const },
+                { label: 'Ready',               value: statusCounts.ready,           color: '#059669', filter: 'ready' as const },
+                { label: 'Not eligible',        value: statusCounts['not-eligible'], color: '#6B7280', filter: 'not-eligible' as const },
+              ]).map(kpi => (
+                <button
+                  key={kpi.label}
+                  onClick={() => setStatusFilter(kpi.filter)}
+                  className="text-center px-4 py-2 bg-gray-50 rounded-xl border border-gray-100 min-w-[70px] hover:border-gray-300 transition-colors"
+                >
                   <div className="text-xl font-bold" style={{ color: kpi.color }}>{kpi.value}</div>
                   <div className="text-xs text-gray-500 mt-0.5">{kpi.label}</div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
         </div>
 
-        {/* Workflow notice */}
-        <div className="bg-blue-50 border border-blue-100 rounded-xl px-5 py-3 flex items-start gap-3">
-          <span className="text-blue-500 text-lg mt-0.5">ℹ</span>
-          <div className="text-sm text-blue-800">
-            <strong>Workflow:</strong> Projects marked as <em>Eligible</em> will proceed to the feedback/send flow.
-            Projects marked as <em>Not Eligible / Exempted</em> can be sent for manager approval —
-            if the manager approves, the project becomes eligible; if declined, it returns to the Exempted state.
-          </div>
+        {/* How this works — quiet, collapsible; row subtitles already explain
+            the everyday case, so this is only for people who want the detail. */}
+        <div>
+          <button
+            onClick={() => setShowHowThisWorks(s => !s)}
+            className="text-xs font-medium text-gray-500 hover:text-gray-700 flex items-center gap-1"
+          >
+            <i className={`ti ti-chevron-${showHowThisWorks ? 'down' : 'right'}`} style={{ fontSize: 13 }} />
+            How this works
+          </button>
+          {showHowThisWorks && (
+            <div className="bg-blue-50 border border-blue-100 rounded-xl px-5 py-3 mt-2 text-sm text-blue-800">
+              Newly added projects need approval from Management or the project's manager before anything else
+              happens. Once approved, <em>Ready</em> projects can receive feedback requests; projects marked{' '}
+              <em>Not eligible</em> can be sent to a manager for override — if approved, they become eligible,
+              if declined, they stay not eligible.
+            </div>
+          )}
         </div>
 
-        {/* Controls row — FIX 3: removed Active/Completed filter buttons */}
+        {/* Controls row */}
         <div className="flex justify-end">
-          {canManage && (
+          {canAddProjects && (
             <button
               onClick={() => setEnrollModal(true)}
               style={{ background: BRAND.green }}
@@ -582,19 +808,19 @@ export const CsatCycleDetailPage: React.FC = () => {
           )}
         </div>
 
-        {/* Eligibility filter tabs */}
+        {/* Status filter pills */}
         <div className="flex gap-2 flex-wrap">
-          {[
-            { label: 'All Projects', value: 'all' as EligFilter },
-            { label: `✓ Eligible (${kpiEligible})`,             value: 'eligible' as EligFilter },
-            { label: `⚠ Exempted (${kpiExempted})`, value: 'exempted' as EligFilter },
-            { label: `⏳ Pending Approval (${kpiPending})`,       value: 'pending_approval' as EligFilter },
-          ].map(tab => (
+          {([
+            { label: 'All projects', filter: 'all' as const },
+            { label: `Needs review (${statusCounts.review})`, filter: 'review' as const },
+            { label: `Ready (${statusCounts.ready})`, filter: 'ready' as const },
+            { label: `Not eligible (${statusCounts['not-eligible']})`, filter: 'not-eligible' as const },
+          ]).map(tab => (
             <button
-              key={tab.value}
-              onClick={() => setEligFilter(tab.value)}
+              key={tab.filter}
+              onClick={() => setStatusFilter(tab.filter)}
               className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-                eligFilter === tab.value
+                statusFilter === tab.filter
                   ? 'bg-gray-800 text-white border-transparent'
                   : 'text-gray-600 border-gray-200 hover:border-gray-400 bg-white'
               }`}
@@ -604,14 +830,14 @@ export const CsatCycleDetailPage: React.FC = () => {
           ))}
         </div>
 
-        {/* Projects Table — FIX 3: STATUS column removed */}
+        {/* Projects list */}
         {projectsLoading ? (
           <LoadingSpinner text="Loading projects..." />
         ) : displayedProjects.length === 0 ? (
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm py-16 text-center">
             <div className="text-4xl mb-3 opacity-30">◫</div>
             <p className="text-gray-500 font-medium">No projects found</p>
-            {canManage && eligFilter === 'all' && (
+            {canAddProjects && statusFilter === 'all' && (
               <button
                 onClick={() => setEnrollModal(true)}
                 className="mt-4 px-4 py-2 text-sm font-medium rounded-lg text-white"
@@ -622,162 +848,88 @@ export const CsatCycleDetailPage: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full">
-              <thead>
-                <tr style={{ background: '#F8FAF9', borderBottom: '2px solid #E5E7EB' }}>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Project</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Eligibility</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</th>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm divide-y divide-gray-50">
+            {displayedProjects.map(project => {
+              const status = getRowStatus(project);
+
+              // Secondary actions tucked behind the row's overflow menu —
+              // only ever built for people who can actually act on them.
+              // Note: no "Mark exempted" entry here — a project only reaches
+              // this cycle after already being triaged (Eligible/Not sure/
+              // Exempt) in the pre-cycle Select Projects staging flow, so
+              // re-exempting it here would be a redundant second check.
+              // "Make eligible" / "Send to manager" below stay, since those
+              // handle rows that arrive already exempted (e.g. added to an
+              // existing cycle directly, bypassing staging).
+              const menuItems: { label: string; onClick: () => void; disabled?: boolean }[] = [];
+              if (canManage && !isManager && !isManagerDecided(project)) {
+                if (status === 'not-eligible') {
+                  menuItems.push(
+                    { label: 'Make eligible', onClick: () => markEligibleMutation.mutate(project.enrollment_id), disabled: markEligibleMutation.isPending },
+                    // "Send to manager" broadcasts to everyone with role
+                    // MANAGER — any of them can decide, not just this
+                    // project's specific PM — so this no longer needs a PM
+                    // to be assigned in TMS to make sense.
+                    { label: 'Send to manager', onClick: () => requestApprovalMutation.mutate(project.enrollment_id), disabled: requestApprovalMutation.isPending },
+                  );
+                }
+              }
+
+              return (
+                <div key={project.enrollment_id} className="flex items-center gap-4 px-4 py-3.5">
+                  <div
+                    className="w-1 self-stretch rounded-full flex-shrink-0"
+                    style={{ background: ROW_STATUS_META[status].bar }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-800 truncate">{project.project_name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5 truncate">{rowSubtitle(project, status)}</p>
+                  </div>
+
+                  <RowStatusBadge
+                    status={status}
+                    label={status === 'review' && project.can_approve_addition ? 'Needs your review' : undefined}
+                  />
+
                   {canManage && (
-                    <th className="px-5 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {status === 'review' && project.can_approve_addition && (
+                        <button
+                          onClick={() => setAdditionTarget(project)}
+                          className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 whitespace-nowrap"
+                        >
+                          Review
+                        </button>
+                      )}
+
+                      {status === 'ready' && canSendFeedback && (
+                        <button
+                          onClick={() => navigate('/feedback/send', {
+                            state: { cycleId, projectId: Number(project.project_ext_id), enrollmentId: project.enrollment_id },
+                          })}
+                          className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white whitespace-nowrap flex items-center gap-1"
+                          style={{ background: BRAND.green }}
+                        >
+                          Send feedback →
+                        </button>
+                      )}
+
+                      {project.eligibility_status === 'pending_approval' && isManager && (
+                        <button
+                          onClick={() => setApprovalTarget(project)}
+                          className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white whitespace-nowrap"
+                          style={{ background: '#3B82F6' }}
+                        >
+                          Give decision
+                        </button>
+                      )}
+
+                      <RowMenu items={menuItems} />
+                    </div>
                   )}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {displayedProjects.map(project => (
-                  <tr
-                    key={project.enrollment_id}
-                    className="hover:bg-gray-50 transition-colors"
-                  >
-                    {/* Project name + ID */}
-                    <td className="px-5 py-4">
-                      <div className="font-semibold text-sm text-gray-800">{project.project_name}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">{project.project_ext_id}</div>
-                    </td>
-
-                    {/* Eligibility badge */}
-                    <td className="px-5 py-4">
-                      <EligibilityBadge status={project.eligibility_status} />
-                    </td>
-
-                    {/* Notes */}
-                    <td className="px-5 py-4 text-xs text-gray-500 max-w-[200px]">
-                      {project.exemption_reason && (
-                        <span title={project.exemption_reason} className="block truncate">
-                          {project.exemption_reason}
-                        </span>
-                      )}
-                      {project.manager_remarks && (
-                        <span className="block text-blue-600 truncate mt-0.5" title={project.manager_remarks}>
-                          Manager: {project.manager_remarks}
-                        </span>
-                      )}
-                      {project.approved_or_declined_at && (
-                        <span className="text-gray-400 block mt-0.5">
-                          {formatDate(project.approved_or_declined_at)}
-                        </span>
-                      )}
-                    </td>
-
-                    {/* Actions */}
-                    {canManage && (
-                      <td className="px-5 py-4">
-                        <div className="flex items-center justify-center gap-2 flex-wrap">
-                          {(project.eligibility_status === 'eligible' || project.eligibility_status === 'approved') && (
-                            <button
-                              onClick={() => navigate('/feedback/send', {
-                                state: { cycleId, projectId: Number(project.project_ext_id), enrollmentId: project.enrollment_id },
-                              })}
-                              className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white"
-                              style={{ background: BRAND.green }}
-                            >
-                              Send Feedback →
-                            </button>
-                          )}
-
-                          {project.eligibility_status === 'eligible' && !isManager && !isManagerDecided(project) && (
-                            <button
-                              onClick={() => setExemptTarget(project)}
-                              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50"
-                            >
-                              Mark Exempted
-                            </button>
-                          )}
-
-                          {project.eligibility_status === 'exempted' && !isManager && !isManagerDecided(project) && (
-                            <>
-                              <button
-                                onClick={() => markEligibleMutation.mutate(project.enrollment_id)}
-                                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50"
-                                disabled={markEligibleMutation.isPending}
-                              >
-                                Make Eligible
-                              </button>
-                              <button
-                                onClick={() => requestApprovalMutation.mutate(project.enrollment_id)}
-                                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50"
-                                disabled={requestApprovalMutation.isPending}
-                              >
-                                → Send to Manager
-                              </button>
-                            </>
-                          )}
-
-                          {/* Manager already declined this project — final state, no actions.
-                              (Manager-approved rows fall through to just "Send Feedback" above.) */}
-                          {project.eligibility_status === 'exempted' && !isManager && isManagerDecided(project) && (
-                            <span className="text-xs text-gray-300">—</span>
-                          )}
-
-                          {project.eligibility_status === 'pending_approval' && isManager && (
-                            <button
-                              onClick={() => setApprovalTarget(project)}
-                              className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white"
-                              style={{ background: '#3B82F6' }}
-                            >
-                              Give Decision
-                            </button>
-                          )}
-
-                          {isManager
-                            && project.eligibility_status !== 'pending_approval'
-                            && !(project.eligibility_status === 'eligible' || project.eligibility_status === 'approved')
-                            && (
-                              <span className="text-xs text-gray-300">—</span>
-                            )}
-
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Summary cards at bottom */}
-        {eligFilter === 'all' && allProjects.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-bold text-green-800">Eligible for Review</span>
-                <span className="text-xl font-bold text-green-700">{eligibleProjects.length}</span>
-              </div>
-              <p className="text-xs text-green-700">These projects will receive CSAT feedback requests.</p>
-              {eligibleProjects.slice(0, 3).map(p => (
-                <div key={p.enrollment_id} className="mt-2 text-xs text-green-600 truncate">• {p.project_name}</div>
-              ))}
-              {eligibleProjects.length > 3 && (
-                <div className="text-xs text-green-500 mt-1">+{eligibleProjects.length - 3} more</div>
-              )}
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-bold text-amber-800">Not Eligible / Exempted</span>
-                <span className="text-xl font-bold text-amber-700">{exemptedProjects.length}</span>
-              </div>
-              <p className="text-xs text-amber-700">Awaiting manager approval or currently exempted.</p>
-              {exemptedProjects.slice(0, 3).map(p => (
-                <div key={p.enrollment_id} className="mt-2 text-xs text-amber-600 truncate">• {p.project_name}</div>
-              ))}
-              {exemptedProjects.length > 3 && (
-                <div className="text-xs text-amber-500 mt-1">+{exemptedProjects.length - 3} more</div>
-              )}
-            </div>
-
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -789,16 +941,7 @@ export const CsatCycleDetailPage: React.FC = () => {
           enrolledIds={enrolledTmsIds}
           onClose={() => setEnrollModal(false)}
           onDone={() => { setEnrollModal(false); invalidate(); }}
-           cycleStartDate={(cycle as any)?.start_date ?? (cycle as any)?.startDate ?? null}
-          cycleEndDate={(cycle as any)?.end_date   ?? (cycle as any)?.endDate   ?? null}
-        />
-      )}
-      {exemptTarget && (
-        <ExemptionModal
-          project={exemptTarget}
-          cycleId={cycleId}
-          onClose={() => setExemptTarget(null)}
-          onDone={() => { setExemptTarget(null); invalidate(); }}
+          onTriaged={invalidate}
         />
       )}
       {approvalTarget && (
@@ -807,6 +950,14 @@ export const CsatCycleDetailPage: React.FC = () => {
           cycleId={cycleId}
           onClose={() => setApprovalTarget(null)}
           onDone={() => { setApprovalTarget(null); invalidate(); }}
+        />
+      )}
+      {additionTarget && (
+        <AdditionDecisionModal
+          project={additionTarget}
+          cycleId={cycleId}
+          onClose={() => setAdditionTarget(null)}
+          onDone={() => { setAdditionTarget(null); invalidate(); }}
         />
       )}
     </PageWrapper>

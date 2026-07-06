@@ -59,6 +59,7 @@ export const useAuthStore = create<AuthStore>()(
           [UserRole.QUALITY]:           ['*'],
           [UserRole.DELIVERY]:            ['view_projects', 'send_feedback', 'view_feedback', 'view_reports'],
           [UserRole.MANAGER]:            ['view_projects', 'send_feedback', 'view_feedback', 'view_reports'],
+          [UserRole.MANAGEMENT]:            ['view_projects', 'send_feedback', 'view_feedback', 'view_reports'],
           [UserRole.SALES]:         ['view_reports', 'view_dashboard', 'export_reports'],
           [UserRole.CUSTOMER]:                ['submit_feedback'],
         };

@@ -23,6 +23,7 @@ const ROLE_HOME: Record<UserRole, string> = {
   [UserRole.QUALITY]:           ROUTES.DASHBOARD,
   [UserRole.DELIVERY]:            ROUTES.DASHBOARD,
   [UserRole.MANAGER]:            ROUTES.DASHBOARD,
+  [UserRole.MANAGEMENT]:            ROUTES.DASHBOARD,
   [UserRole.SALES]:         ROUTES.REPORTS,
   [UserRole.CUSTOMER]:                ROUTES.UNAUTHORIZED,
 };
@@ -112,12 +113,7 @@ const TopNav: React.FC = () => {
         })}
       </ul>
 
-      <a
-          href="https://www.mindteck.com/"
-          className="rounded-full border border-[#D6D6D6] px-5 py-2 text-sm font-medium text-[#1A1A1A] shadow-sm transition hover:-translate-y-0.5 hover:border-[#909090] hover:shadow-md"
-        >
-          Visit Mindteck
-        </a>
+      
 
       {/* CTA */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -760,10 +756,7 @@ const Footer: React.FC = () => (
       <Link to={ROUTES.LOGIN} style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', textDecoration: 'none' }}>
         Sign in
       </Link>
-<a href="https://www.mindteck.com/" target="_blank" rel="noopener noreferrer"
-        style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', textDecoration: 'none' }}>
-        Visit Mindteck ↗
-      </a>
+
     </div>
   </footer>
 );
