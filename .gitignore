@@ -14,7 +14,7 @@ env/
 
 # frontend ignore
 # frontend/
-
+frontend/dist/
 # zip ignore
 *.zip
 
