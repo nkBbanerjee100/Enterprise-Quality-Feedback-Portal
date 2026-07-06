@@ -13,7 +13,7 @@ mvenv/
 env/
 
 # frontend ignore
-frontend/
+# frontend/
 
 # zip ignore
 *.zip

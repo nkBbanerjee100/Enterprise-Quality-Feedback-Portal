@@ -6,7 +6,7 @@ import { CSATCycle, PaginatedResponse } from '../types/common.types';
 import {
   EnrolledProject, EnrollProjectsRequest, SetEligibilityRequest,
   RequestManagerApprovalRequest, ManagerDecisionRequest,
-  CycleProjectsResponse,
+  CycleProjectsResponse, DeclineAdditionRequest,
 } from '../types/csat-cycle.types';
 
 export const csatCyclesApi = {
@@ -103,6 +103,21 @@ export const csatCyclesApi = {
 
   deleteCycle: async (cycleId: number): Promise<void> => {
     await api.delete(`/api/csat-cycles/${cycleId}`);
+  },
+
+  // ── Addition approval (separate from the exemption flow above) ────────────
+  approveAddition: async (cycleId: number, enrollmentId: number): Promise<EnrolledProject> => {
+    const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/approve-addition`);
+    return r.data;
+  },
+
+  declineAddition: async (
+    cycleId: number,
+    enrollmentId: number,
+    payload: DeclineAdditionRequest = {},
+  ): Promise<EnrolledProject> => {
+    const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/decline-addition`, payload);
+    return r.data;
   },
 
   removeProject: async (cycleId: number, enrollmentId: number): Promise<void> => {

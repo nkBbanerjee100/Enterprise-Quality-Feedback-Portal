@@ -5,7 +5,7 @@
  * No displayName field — use first_name + last_name throughout
  */
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
 import { ROUTES } from '../../utils/constants';
@@ -25,66 +25,68 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Dashboard',
     path:  ROUTES.DASHBOARD,
     icon:  '▦',
-    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER],
+    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
   },
   {
     label: 'Projects',
     path:  ROUTES.PROJECTS,
     icon:  '◫',
-    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER],
+    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
 
   },
   {
     label: 'Feedback',
     path:  ROUTES.FEEDBACK,
     icon:  '✉',
-    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER],
+    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
   },
   {
     label: 'CSAT Cycles',
     path:  ROUTES.CSAT_CYCLES,
     icon:  '↺',
-        roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER],
+        roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
 
   },
   {
     label: 'Action Plans',
     path:  ROUTES.ACTION_PLANS,
     icon:  '✓',
-    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER],
+    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
 
   },
   {
     label: 'Reports',
     path:  ROUTES.REPORTS,
     icon:  '⬛',
-    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER],
+    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
   },
   
   {
     label: 'Audit Logs',
     path:  ROUTES.ADMIN_AUDIT_LOGS,
     icon:  '☰',
-    roles: [UserRole.QUALITY  ,UserRole.MANAGER],
+    roles: [UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT],
   },
   {
     label: 'Allow User',
     path:  '/allow-user',
     icon:  '✓',
-    roles: [UserRole.QUALITY, UserRole.MANAGER],
+    roles: [UserRole.QUALITY, UserRole.MANAGER , UserRole.MANAGEMENT],
   },
 ];
 
 const ROLE_LABEL: Record<UserRole, string> = {
   [UserRole.QUALITY]:           'QUALITY',
   [UserRole.DELIVERY]:            'DELIVERY',
-  [UserRole.MANAGER]:            'MANAGER',
+  [UserRole.MANAGER ]:            'MANAGER',
+  [UserRole.MANAGEMENT]:            'MANAGEMENT',
   [UserRole.SALES]:         'SALES',
   [UserRole.CUSTOMER]:                'CUSTOMER',
 };
 
 export const Sidebar: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { user } = useAuthStore();
 
   const visibleItems = NAV_ITEMS.filter(
@@ -309,6 +311,29 @@ export const Sidebar: React.FC = () => {
     {/* plus icon */}
     <span style={{ fontSize: 16, color: BRAND.gold, marginLeft: 4, lineHeight: 1 }}>+</span>
   </div>
+
+  <button
+    onClick={() => navigate(ROUTES.REPORTS)}
+    style={{
+      marginTop: 16,
+      width: '100%',
+      background: 'rgba(255,255,255,0.1)',
+      border: '1px solid rgba(255,255,255,0.18)',
+      borderRadius: 8,
+      padding: '9px 0',
+      color: '#fff',
+      fontSize: 12.5,
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      position: 'relative',
+    }}
+  >
+    View Analytics <span style={{ fontSize: 13 }}>↗</span>
+  </button>
 </div>
 
       {/* ── Footer ── */}

@@ -1,1 +1,0 @@
-"""Core security and authentication"""

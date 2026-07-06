@@ -36,6 +36,7 @@ export enum UserRole {
   CUSTOMER                = 'CUSTOMER',
   SALES = 'SALES',
   MANAGER = 'MANAGER',
+  MANAGEMENT = 'MANAGEMENT',
 }
 
 export interface AuthState {

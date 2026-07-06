@@ -1,231 +1,348 @@
 /**
- * Management User Dashboard
+ * Management Dashboard
  *
- * Default landing page for role: Management_User
- * Shows: high-level KPIs, feedback trends, department breakdown,
- * avg score by month, response rate, export button — all read-only
- * per doc §4 (Management User can: view dashboards, view quality trends,
- * view customer satisfaction summaries, export reports)
+ * Default landing page for role: MANAGEMENT.
+ * Project-centric view: active/completed projects in the current CSAT
+ * cycle, eligibility rate, avg CSAT score. Sparkline trend charts inside
+ * the KPI cards are intentionally left out of this pass — everything else
+ * (KPI numbers, Active Projects table, Completed Projects table with
+ * search) is built out.
  */
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { PageWrapper } from '../../components/layout/PageWrapper';
 import { useAuthStore } from '../../store/auth.store';
 import { useDashboard } from '../../hooks/useDashboard';
-import { useFeedbackRequests, useFeedbackResponses } from '../../hooks/useFeedback';
+import { csatCyclesApi } from '../../api/csat-cycles.api';
+import { EnrolledProject, EligibilityStatus } from '../../types/csat-cycle.types';
 import { ROUTES, BRAND } from '../../utils/constants';
 
-// ─── Reusable KPI card ────────────────────────────────────────────────────────
+// ─── KPI card (no trend sparkline — per this pass) ────────────────────────────
 const KpiCard: React.FC<{
-  label: string; value: string | number; sub?: string; accent?: string;
-  trend?: number; iconChar?: string;
-}> = ({ label, value, sub, accent = BRAND.green, trend, iconChar }) => (
+  label: string; value: string | number; sub?: string; accent: string; icon: string;
+}> = ({ label, value, sub, accent, icon }) => (
   <div style={{
-    background: '#FFF', border: '1px solid #D4E4DA',
-    borderTop: `3px solid ${accent}`, borderRadius: '10px', padding: '20px 22px',
+    background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+    padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14,
   }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-      <p style={{ fontSize: '11px', color: BRAND.textMid, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', margin: 0 }}>
-        {label}
-      </p>
-      {iconChar && <span style={{ fontSize: '18px', color: accent, opacity: 0.6 }}>{iconChar}</span>}
+    <div style={{
+      width: 40, height: 40, borderRadius: 10, background: `${accent}1A`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
+    }}>
+      {icon}
     </div>
-    <p style={{ fontSize: '28px', fontWeight: 700, color: BRAND.textDark, marginTop: '10px', lineHeight: 1 }}>
-      {value}
-    </p>
-    {trend !== undefined && (
-      <p style={{ fontSize: '12px', color: trend >= 0 ? '#16A34A' : '#DC2626', marginTop: '4px' }}>
-        {trend >= 0 ? '↑' : '↓'} {Math.abs(trend)}% vs last period
-      </p>
-    )}
-    {sub && <p style={{ fontSize: '12px', color: BRAND.textLight, marginTop: '4px' }}>{sub}</p>}
+    <div>
+      <p style={{ fontSize: 26, fontWeight: 700, color: BRAND.textDark, margin: 0, lineHeight: 1.1 }}>{value}</p>
+      <p style={{ fontSize: 13, color: BRAND.textMid, margin: '4px 0 0', fontWeight: 500 }}>{label}</p>
+      {sub && <p style={{ fontSize: 11.5, color: BRAND.textLight, margin: '3px 0 0' }}>{sub}</p>}
+    </div>
   </div>
 );
 
-// ─── Simple bar chart (pure CSS — no recharts needed for skeleton) ─────────────
-const BarChart: React.FC<{ title: string; data: { label: string; value: number; max?: number }[] }> = ({ title, data }) => {
-  const max = Math.max(...data.map(d => d.value), 1);
+// ─── Eligibility status pill ───────────────────────────────────────────────────
+function StatusPill({ status }: { status: EligibilityStatus }) {
+  const map: Record<EligibilityStatus, { bg: string; text: string; label: string }> = {
+    eligible:         { bg: '#E7F6EC', text: '#1A5C3A', label: 'Eligible' },
+    approved:         { bg: '#E7F6EC', text: '#1A5C3A', label: 'Eligible' },
+    pending_approval:  { bg: '#EFF4FF', text: '#2563EB', label: 'Pending' },
+    exempted:         { bg: '#FEF2F2', text: '#B91C1C', label: 'Not Eligible' },
+    declined:         { bg: '#FEF2F2', text: '#B91C1C', label: 'Not Eligible' },
+  };
+  const m = map[status] ?? map.eligible;
   return (
-    <div style={{ background: '#FFF', border: '1px solid #D4E4DA', borderRadius: '10px', padding: '20px 22px' }}>
-      <h3 style={{ fontSize: '13px', fontWeight: 700, color: BRAND.textDark, marginBottom: '18px' }}>{title}</h3>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        {data.map(({ label, value }) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ width: '90px', fontSize: '11px', color: BRAND.textMid, textAlign: 'right', flexShrink: 0 }}>{label}</span>
-            <div style={{ flex: 1, background: BRAND.greenMuted, borderRadius: '4px', overflow: 'hidden', height: '22px' }}>
-              <div style={{
-                width: `${(value / max) * 100}%`,
-                height: '100%',
-                background: BRAND.green,
-                borderRadius: '4px',
-                display: 'flex', alignItems: 'center',
-                transition: 'width 0.4s ease',
-              }} />
-            </div>
-            <span style={{ width: '32px', fontSize: '12px', fontWeight: 600, color: BRAND.textDark }}>{value}</span>
-          </div>
-        ))}
-      </div>
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', padding: '4px 12px',
+      borderRadius: 20, fontSize: 12, fontWeight: 600, background: m.bg, color: m.text,
+    }}>
+      {m.label}
+    </span>
+  );
+}
+
+// ─── Row-avatar (initials-free placeholder icon, matches the screenshot) ──────
+function ProjectAvatar() {
+  return (
+    <div style={{
+      width: 34, height: 34, borderRadius: 8, background: '#EEF4F0',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    }}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={BRAND.green} strokeWidth="2">
+        <rect x="3" y="7" width="18" height="13" rx="2" />
+        <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      </svg>
     </div>
   );
-};
+}
 
-// ─── Sparkline (score trend by month — pure CSS dots) ─────────────────────────
-const ScoreTrendChart: React.FC<{ title: string; data: { month: string; score: number }[] }> = ({ title, data }) => {
-  const max = 5; // CSAT max
-  return (
-    <div style={{ background: '#FFF', border: '1px solid #D4E4DA', borderRadius: '10px', padding: '20px 22px' }}>
-      <h3 style={{ fontSize: '13px', fontWeight: 700, color: BRAND.textDark, marginBottom: '18px' }}>{title}</h3>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '10px', height: '80px' }}>
-        {data.map(({ month, score }) => (
-          <div key={month} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: BRAND.green }}>{score.toFixed(1)}</span>
-            <div style={{
-              width: '100%',
-              height: `${(score / max) * 60}px`,
-              background: `linear-gradient(to top, ${BRAND.green}, ${BRAND.greenLight})`,
-              borderRadius: '4px 4px 0 0',
-              minHeight: '8px',
-            }} />
-            <span style={{ fontSize: '10px', color: BRAND.textLight }}>{month}</span>
-          </div>
-        ))}
-      </div>
-      <p style={{ fontSize: '11px', color: BRAND.textLight, marginTop: '8px' }}>Average CSAT score (1–5 scale)</p>
-    </div>
-  );
-};
+const fmtDate = (iso?: string) => iso
+  ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
+  : '—';
 
-// ─── Export button ─────────────────────────────────────────────────────────────
-const ExportButton: React.FC<{ onExport: () => void }> = ({ onExport }) => (
-  <button
-    onClick={onExport}
-    style={{
-      display: 'flex', alignItems: 'center', gap: '6px',
-      padding: '9px 18px', background: BRAND.gold, color: '#FFF',
-      border: 'none', borderRadius: '7px',
-      fontSize: '13px', fontWeight: 700, cursor: 'pointer',
-      letterSpacing: '0.02em',
-    }}
-  >
-    ↓ Export Report
-  </button>
-);
-
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Main component ────────────────────────────────────────────────────────────
 export const ManagementDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { data: dashData, isLoading } = useDashboard();
-  const { data: feedbackData } = useFeedbackRequests(0, 100);
+  const [search, setSearch] = useState('');
 
-  const allRequests = feedbackData?.data ?? [];
-  const submitted   = allRequests.filter(r => ['SUBMITTED', 'completed'].includes(r.status));
-  const sent        = allRequests.filter(r => !['ELIGIBLE', 'DRAFT'].includes(r.status));
-  const responseRate = sent.length > 0 ? `${Math.round((submitted.length / sent.length) * 100)}%` : '—';
-  const avgScore = dashData?.metrics?.averageCsatScore?.toFixed(2) ?? '—';
+  const { data: dashData } = useDashboard();
 
-  // Placeholder trend data — replaced by real API data when backend is ready
-  const monthlyScores = [
-    { month: 'Jan', score: 3.8 },
-    { month: 'Feb', score: 4.1 },
-    { month: 'Mar', score: 3.9 },
-    { month: 'Apr', score: 4.3 },
-    { month: 'May', score: 4.0 },
-    { month: 'Jun', score: 4.4 },
-  ];
+  const { data: cyclesData } = useQuery({
+    queryKey: ['csatCycles', 'dashboard'],
+    queryFn: () => csatCyclesApi.list(0, 20),
+  });
 
-  const deptBreakdown = [
-    { label: 'Engineering', value: 42 },
-    { label: 'Delivery',    value: 31 },
-    { label: 'Consulting',  value: 18 },
-    { label: 'Support',     value: 12 },
-  ];
+  // Pick the cycle whose window contains today; fall back to the most
+  // recently started one if nothing matches (e.g. between cycles).
+  const currentCycle = useMemo(() => {
+    const cycles = cyclesData?.data ?? [];
+    if (cycles.length === 0) return null;
+    const today = new Date();
+    const inWindow = cycles.find(c => {
+      const start = c.start_date ?? c.startDate;
+      const end = c.end_date ?? c.endDate;
+      return start && end && new Date(start) <= today && today <= new Date(end);
+    });
+    if (inWindow) return inWindow;
+    return [...cycles].sort((a, b) => {
+      const aStart = new Date(a.start_date ?? a.startDate ?? 0).getTime();
+      const bStart = new Date(b.start_date ?? b.startDate ?? 0).getTime();
+      return bStart - aStart;
+    })[0];
+  }, [cyclesData]);
 
-  const handleExport = () => navigate(ROUTES.REPORTS);
+  const cycleId = currentCycle?.id;
+
+  const { data: activeData, isLoading: activeLoading } = useQuery({
+    queryKey: ['dashboardActiveProjects', cycleId],
+    queryFn: () => csatCyclesApi.listProjects(cycleId!, { project_status: 'active', limit: 3, active_first: true }),
+    enabled: !!cycleId,
+  });
+
+  const { data: completedData, isLoading: completedLoading } = useQuery({
+    queryKey: ['dashboardCompletedProjects', cycleId],
+    queryFn: () => csatCyclesApi.listProjects(cycleId!, { project_status: 'completed', limit: 100 }),
+    enabled: !!cycleId,
+  });
+
+  const activeProjects = activeData?.data ?? [];
+  const activeTotal = activeData?.total ?? 0;
+  const completedTotal = completedData?.total ?? 0;
+
+  const completedProjects = useMemo(() => {
+    const list = completedData?.data ?? [];
+    if (!search.trim()) return list;
+    const q = search.toLowerCase();
+    return list.filter(p => p.project_name.toLowerCase().includes(q));
+  }, [completedData, search]);
+
+  // Summary is cycle-wide regardless of which project_status filter was
+  // used to fetch it (backend computes it from the full cycle) — either
+  // call's summary works here.
+  const summary = activeData?.summary ?? completedData?.summary;
+  const eligibilityRate = useMemo(() => {
+    if (!summary) return null;
+    const total = Object.values(summary).reduce((a, b) => a + (b ?? 0), 0);
+    if (total === 0) return null;
+    const eligible = (summary.eligible ?? 0) + (summary.approved ?? 0);
+    return Math.round((eligible / total) * 100);
+  }, [summary]);
+
+  const avgScore = dashData?.metrics?.averageCsatScore;
+
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const firstName = user?.displayName?.split(' ')[0] ?? user?.first_name ?? 'there';
+
+  const cyclePeriod = currentCycle
+    ? `${fmtDate(currentCycle.start_date ?? currentCycle.startDate)} – ${fmtDate(currentCycle.end_date ?? currentCycle.endDate)}`
+    : null;
 
   return (
     <PageWrapper>
-      {/* Page header */}
-      <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-        <div>
-          <p style={{ fontSize: '12px', color: BRAND.gold, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '4px' }}>
-            Management View
-          </p>
-          <h1 style={{ fontSize: '24px', fontWeight: 700, color: BRAND.textDark, margin: 0 }}>
-            Quality Overview
-          </h1>
-          <p style={{ fontSize: '13px', color: BRAND.textMid, marginTop: '4px' }}>
-            Customer satisfaction trends and team performance.
-          </p>
-        </div>
-        <ExportButton onExport={handleExport} />
-      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-      {/* KPI row — doc §12: total completed projects, forms sent, submitted, pending, expired, avg score, response rate, negative count */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '28px' }}>
-        <KpiCard label="Forms Sent"       value={sent.length}      accent={BRAND.green}  iconChar="✉"  sub="Total dispatched"          />
-        <KpiCard label="Submitted"        value={submitted.length} accent="#2563EB"      iconChar="✓"  sub="Responses received"       trend={8} />
-        <KpiCard label="Response Rate"    value={responseRate}     accent={BRAND.gold}   iconChar="↑"  sub="Submitted ÷ sent"         />
-        <KpiCard label="Avg CSAT Score"   value={avgScore}         accent="#7C3AED"      iconChar="★"  sub="Out of 5.0"               trend={3} />
-      </div>
-
-      {/* Charts row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' }}>
-        <ScoreTrendChart title="Avg CSAT Score by Month" data={monthlyScores} />
-        <BarChart title="Feedback by Delivery" data={deptBreakdown} />
-      </div>
-
-      {/* Summary table — doc §12: sent feedback requests, submitted feedback */}
-      <div style={{ background: '#FFF', border: '1px solid #D4E4DA', borderRadius: '10px', overflow: 'hidden' }}>
-        <div style={{ padding: '18px 22px', borderBottom: '1px solid #EEF3F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ fontSize: '14px', fontWeight: 700, color: BRAND.textDark, margin: 0 }}>Recent Submitted Feedback</h2>
-          <button
-            onClick={() => navigate(ROUTES.REPORTS)}
-            style={{ fontSize: '12px', color: BRAND.green, fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-          >
-            Full reports →
-          </button>
-        </div>
-
-        {isLoading ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: BRAND.textLight, fontSize: '13px' }}>Loading…</div>
-        ) : submitted.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center' }}>
-            <p style={{ fontSize: '14px', color: BRAND.textMid, fontWeight: 500 }}>No submitted feedback yet</p>
-            <p style={{ fontSize: '12px', color: BRAND.textLight, marginTop: '4px' }}>Submitted responses will appear here.</p>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{
+            width: 40, height: 40, borderRadius: 10, background: '#E7F6EC',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0,
+          }}>
+            📷
           </div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: BRAND.surface }}>
-                {['Customer', 'Project', 'Submitted', 'CSAT Score'].map(h => (
-                  <th key={h} style={{ padding: '10px 16px', fontSize: '11px', fontWeight: 600, color: BRAND.textMid, textAlign: 'left', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {submitted.slice(0, 8).map((req) => (
-                <tr key={req.id} style={{ borderTop: '1px solid #EEF3F0' }}>
-                  <td style={{ padding: '12px 16px', fontSize: '13px', color: BRAND.textDark, fontWeight: 500 }}>
-                    {req.recipientName}
-                    <div style={{ fontSize: '11px', color: BRAND.textLight }}>{req.recipientEmail}</div>
-                  </td>
-                  <td style={{ padding: '12px 16px', fontSize: '12px', color: BRAND.textMid }}>#{req.projectId}</td>
-                  <td style={{ padding: '12px 16px', fontSize: '12px', color: BRAND.textMid }}>
-                    {req.requestSentAt ? new Date(req.requestSentAt).toLocaleDateString() : '—'}
-                  </td>
-                  <td style={{ padding: '12px 16px' }}>
-                    {/* Score placeholder — real value comes from fact_feedback_response via reports API */}
-                    <span style={{ fontSize: '13px', fontWeight: 700, color: BRAND.green }}>—</span>
-                  </td>
+          <div>
+            <h1 style={{ fontSize: 20, fontWeight: 700, color: BRAND.textDark, margin: 0 }}>
+              {greeting}, {firstName}! 👋
+            </h1>
+            <p style={{ fontSize: 13, color: BRAND.textMid, margin: '2px 0 0' }}>
+              Here's what's happening with your CSAT cycles.
+            </p>
+          </div>
+        </div>
+
+        {/* KPI row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+          <KpiCard
+            label="Active Projects" value={activeLoading ? '—' : activeTotal}
+            sub={activeTotal > 0 ? `${activeTotal} in this cycle` : undefined}
+            accent="#1A5C3A" icon="💼"
+          />
+          <KpiCard
+            label="Completed Projects" value={completedLoading ? '—' : completedTotal}
+            sub={cyclePeriod ?? undefined}
+            accent="#2563EB" icon="✓"
+          />
+          <KpiCard
+            label="Eligibility Rate" value={eligibilityRate != null ? `${eligibilityRate}%` : '—'}
+            sub="Across active projects"
+            accent="#7C3AED" icon="◎"
+          />
+          <KpiCard
+            label="Avg CSAT Score" value={avgScore != null ? `${avgScore.toFixed(1)}/5` : '—'}
+            sub={currentCycle ? currentCycle.cycle_name ?? currentCycle.cycleName : undefined}
+            accent="#D97706" icon="🏅"
+          />
+        </div>
+
+        {/* Active Projects */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: BRAND.textDark, margin: 0 }}>Active Projects</h2>
+              <span style={{
+                background: '#E7F6EC', color: BRAND.green, fontSize: 12, fontWeight: 700,
+                padding: '2px 9px', borderRadius: 20,
+              }}>
+                {activeTotal}
+              </span>
+            </div>
+            {cycleId && (
+              <button
+                onClick={() => navigate(`/csat-cycles/${cycleId}`)}
+                style={{ fontSize: 13, fontWeight: 600, color: BRAND.textMid, background: '#F3F4F6', border: 'none', borderRadius: 8, padding: '7px 14px', cursor: 'pointer' }}
+              >
+                View all
+              </button>
+            )}
+          </div>
+
+          <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #F1F3F4' }}>
+                  {['Project', 'Project Manager', 'Status', ''].map(h => (
+                    <th key={h} style={{ padding: '12px 20px', fontSize: 11, fontWeight: 600, color: BRAND.textLight, textAlign: h === '' ? 'right' : 'left', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                      {h}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+              </thead>
+              <tbody>
+                {activeLoading ? (
+                  <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>Loading…</td></tr>
+                ) : activeProjects.length === 0 ? (
+                  <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>No active projects in this cycle.</td></tr>
+                ) : activeProjects.map((p: EnrolledProject, i) => (
+                  <tr key={p.enrollment_id} style={{ borderLeft: i === 0 ? `3px solid ${BRAND.green}` : '3px solid transparent', borderBottom: '1px solid #F6F7F8' }}>
+                    <td style={{ padding: '14px 20px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <ProjectAvatar />
+                        <div>
+                          <p style={{ fontSize: 13.5, fontWeight: 600, color: BRAND.textDark, margin: 0 }}>{p.project_name}</p>
+                          <p style={{ fontSize: 11.5, color: BRAND.textLight, margin: '2px 0 0' }}>Added on {fmtDate(p.enrolled_at)}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ padding: '14px 20px', fontSize: 13, color: BRAND.textMid }}>
+                      {p.project_manager_name ?? '—'}
+                    </td>
+                    <td style={{ padding: '14px 20px' }}>
+                      <StatusPill status={p.eligibility_status} />
+                    </td>
+                    <td style={{ padding: '14px 20px', textAlign: 'right' }}>
+                      <button
+                        onClick={() => navigate(`/projects/${p.project_ext_id}`)}
+                        style={{ fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}
+                      >
+                        Details
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Completed Projects */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: BRAND.textDark, margin: 0 }}>Completed Projects</h2>
+              <p style={{ fontSize: 12.5, color: BRAND.textLight, margin: '2px 0 0' }}>
+                {completedTotal} completed{cyclePeriod ? ` · ${cyclePeriod}` : ''}
+              </p>
+            </div>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search projects..."
+              style={{
+                border: '1px solid #E5E7EB', borderRadius: 9, padding: '8px 14px',
+                fontSize: 13, width: 220, outline: 'none',
+              }}
+            />
+          </div>
+
+          <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #F1F3F4' }}>
+                  {['Project', 'Project Manager', 'Enrolled', 'Status', ''].map(h => (
+                    <th key={h} style={{ padding: '12px 20px', fontSize: 11, fontWeight: 600, color: BRAND.textLight, textAlign: h === '' ? 'right' : 'left', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {completedLoading ? (
+                  <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>Loading…</td></tr>
+                ) : completedProjects.length === 0 ? (
+                  <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>
+                    {search ? 'No completed projects match your search.' : 'No completed projects in this cycle yet.'}
+                  </td></tr>
+                ) : completedProjects.map((p: EnrolledProject) => (
+                  <tr key={p.enrollment_id} style={{ borderBottom: '1px solid #F6F7F8' }}>
+                    <td style={{ padding: '14px 20px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <ProjectAvatar />
+                        <p style={{ fontSize: 13.5, fontWeight: 600, color: BRAND.textDark, margin: 0 }}>{p.project_name}</p>
+                      </div>
+                    </td>
+                    <td style={{ padding: '14px 20px', fontSize: 13, color: BRAND.textMid }}>
+                      {p.project_manager_name ?? '—'}
+                    </td>
+                    <td style={{ padding: '14px 20px', fontSize: 13, color: BRAND.textMid }}>
+                      {fmtDate(p.enrolled_at)}
+                    </td>
+                    <td style={{ padding: '14px 20px' }}>
+                      <StatusPill status={p.eligibility_status} />
+                    </td>
+                    <td style={{ padding: '14px 20px', textAlign: 'right' }}>
+                      <button
+                        onClick={() => navigate(ROUTES.REPORTS)}
+                        style={{ fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}
+                      >
+                        View Report
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </PageWrapper>
   );

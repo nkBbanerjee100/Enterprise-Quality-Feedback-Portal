@@ -11,6 +11,7 @@ export const USER_ROLES = {
   CUSTOMER:                'CUSTOMER',
   SALES: 'SALES',
   MANAGER : 'MANAGER',
+  MANAGEMENT : 'MANAGEMENT',
 } as const;
 
 // Feedback Status — matches doc section 7

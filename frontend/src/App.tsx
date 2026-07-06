@@ -25,7 +25,6 @@ import { HomePage }         from './pages/home/HomePage';
 
 // Auth pages
 import { LoginPage }        from './pages/auth/LoginPage';
-import { RegisterPage }     from './pages/auth/RegisterPage';
 //import { ActivateAccountPage } from './pages/auth/ActivateAccountPage';
 import { AllowUserPage }    from './pages/auth/AllowUserPage';
 import { SelfRegisterPage } from './pages/auth/SelfRegisterPage';
@@ -38,7 +37,7 @@ import { ManagementDashboard }  from './pages/reports/ManagementDashboard';
 // Shared pages
 import { CsatCycleListPage }    from './pages/csat-cycles/CsatCycleListPage';
 import { CsatCycleDetailPage }  from './pages/csat-cycles/CsatCycleDetailPage';
-import { CreateCsatCyclePage }  from './pages/csat-cycles/CreateCsatCyclePage';
+import { SelectProjectsPage }   from './pages/csat-cycles/SelectProjectsPage';
 import { ProjectListPage }      from './pages/projects/ProjectListPage';
 import { ProjectDetailPage }    from './pages/projects/ProjectDetailPage';
 import { FeedbackRequestListPage } from './pages/feedback/FeedbackRequestListPage';
@@ -84,7 +83,7 @@ function App() {
               path="/allow-user"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <AllowUserPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -97,7 +96,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <RoleProtectedRoute
-                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER]}
+                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}
                   >
                     <QualityUserDashboard />
                   </RoleProtectedRoute>
@@ -111,7 +110,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <RoleProtectedRoute
-                    allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY , UserRole.SALES , UserRole.MANAGER]}
+                    allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY , UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}
                   >
                     <ManagementDashboard />
                   </RoleProtectedRoute>
@@ -124,7 +123,7 @@ function App() {
               path="/reports/full"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY , UserRole.SALES , UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY , UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <ReportsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -136,18 +135,18 @@ function App() {
               path="/csat-cycles"
               element={
                 <ProtectedRoute>
-                   <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER]}>
+                   <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER , UserRole.MANAGEMENT]}>
                   <CsatCycleListPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
               }
             />
             <Route
-              path="/csat-cycles/create"
+              path="/csat-cycles/select-projects"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER]}>
-                    <CreateCsatCyclePage />
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGEMENT]}>
+                    <SelectProjectsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
               }
@@ -185,7 +184,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <RoleProtectedRoute
-                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER]}
+                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}
                   >
                     <FeedbackRequestListPage />
                   </RoleProtectedRoute>
@@ -196,7 +195,7 @@ function App() {
               path="/feedback/send"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGEMENT]}>
                     <SendFeedbackPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -208,7 +207,7 @@ function App() {
               path="/action-plans"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <ActionPlanListPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -218,7 +217,7 @@ function App() {
               path="/action-plans/:id"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <ActionPlanDetailPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -230,7 +229,7 @@ function App() {
               path="/admin/users"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <UserManagementPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -240,7 +239,7 @@ function App() {
               path="/admin/audit-logs"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <AuditLogsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -251,7 +250,7 @@ function App() {
               path="/admin"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <QualityUserDashboard />
                   </RoleProtectedRoute>
                 </ProtectedRoute>

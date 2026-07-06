@@ -105,6 +105,7 @@ src/
 |---|---|---|
 | `QUALITY` | `/admin` → `/dashboard` | Everything including admin pages |
 | `MANAGER` | `/admin` → `/dashboard` | Everything including admin pages |
+| `MANAGEMENT` | `/admin` → `/dashboard` | Everything including admin pages |
 | `DELIVERY` | `/dashboard` | Dashboard, Projects, Feedback, Reports, Action Plans |
 | `SALES` | `/reports` | Reports, Dashboard, Projects, Feedback, Action Plans |
 | `CUSTOMER` | — (no portal login) | `/survey/:token` only — public, no auth |
