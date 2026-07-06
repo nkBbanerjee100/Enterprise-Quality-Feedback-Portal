@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
-
     # Application
     app_name: str = "CSAT Tool"
     app_version: str = "1.0.0"

@@ -13,6 +13,7 @@ class RoleEnum(str, enum.Enum):
     SALES                 = "SALES"
     CUSTOMER                 = "CUSTOMER"
     MANAGER                 = "MANAGER"
+    MANAGEMENT                 = "MANAGEMENT"
 
 class User(Base):
     """User model"""

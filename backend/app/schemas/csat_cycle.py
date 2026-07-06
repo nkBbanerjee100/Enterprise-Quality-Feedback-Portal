@@ -8,14 +8,21 @@ from enum import Enum
 # ─── Enums ────────────────────────────────────────────────────────────────────
 
 class CycleHalf(str, Enum):
-    H1 = "H1"   # JAN–JUN
-    H2 = "H2"   # JUL–DEC
+    H1 = "H1"   # APR–SEP
+    H2 = "H2"   # OCT–MAR (next year)
 
 
 class EligibilityStatus(str, Enum):
     ELIGIBLE = "eligible"
     EXEMPTED = "exempted"
     PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    DECLINED = "declined"
+
+
+class AdditionApprovalStatus(str, Enum):
+    """Separate from EligibilityStatus — gates adding a project to a cycle at all."""
+    PENDING = "pending"
     APPROVED = "approved"
     DECLINED = "declined"
 
@@ -66,8 +73,21 @@ class EnrolledProjectResponse(BaseModel):
     manager_remarks: Optional[str]
     approved_or_declined_at: Optional[datetime]
 
+    # ── Addition-approval (separate from the exemption flow above) ─────────
+    addition_approval_status: AdditionApprovalStatus
+    addition_approved_by: Optional[str] = None
+    addition_approved_at: Optional[datetime] = None
+    addition_decision_remarks: Optional[str] = None
+    project_manager_emp_id: Optional[str] = None
+    project_manager_name: Optional[str] = None
+    can_approve_addition: bool = False   # computed per-request based on the caller
+
     class Config:
         from_attributes = True
+
+
+class DeclineAdditionRequest(BaseModel):
+    remarks: Optional[str] = None
 
 
 # ─── Enrollment actions ───────────────────────────────────────────────────────

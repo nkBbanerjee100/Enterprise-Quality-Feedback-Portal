@@ -1,63 +1,47 @@
+# CSAT Tool Backend
 
+FastAPI-based REST API for Customer Satisfaction Management.
 
-CSAT Tool Backend
+## Project Structure
 
-FastAPI-based REST API for Customer Satisfaction Management. Uses two MySQL databases — a local csat_tool_db (read/write) and an external tmstestdb1 on the TL's server (read-only).
-
-Tech Stack
-
-
-Framework: FastAPI 0.104.1
-Server: Uvicorn
-ORM: SQLAlchemy 2.0 + Alembic migrations
-Databases: MySQL (PyMySQL driver) — local + TMS read-only
-Auth: JWT (python-jose) + bcrypt password hashing
-Background Jobs: Celery + Redis
-Validation: Pydantic v2
-
-
-
-Project Structure
-
+```
 backend/
 ├── app/
 │   ├── main.py                 # FastAPI application factory
-│   ├── config.py               # Environment variables & settings (Pydantic Settings)
-│   ├── database.py             # Two DB engines: local (R/W) + TMS (R only)
+│   ├── config.py               # Environment variables & settings
+│   ├── database.py             # Database engine & session factory
 │   │
 │   ├── models/                 # SQLAlchemy ORM models
 │   │   ├── user.py             # User & Role models
-│   │   ├── csat_cycle.py       # CSAT Cycle master (Evaluations)
-│   │   ├── cycle_project_enrollment.py # Projects enrolled in CSAT Cycles
+│   │   ├── csat_cycle.py       # CSAT Cycle master
 │   │   ├── project.py          # Projects (from TMS sync)
-│   │   ├── feedback_request.py
-│   │   ├── feedback_response.py
-│   │   ├── feedback_status_history.py
+│   │   ├── feedback_request.py # Feedback requests
+│   │   ├── feedback_response.py# Feedback responses
+│   │   ├── feedback_status_history.py # Status tracking
 │   │   ├── action_plan.py      # Action plans & RCA
 │   │   ├── audit_log.py        # Audit trail
 │   │   └── aggregates.py       # Analytics aggregates
 │   │
 │   ├── schemas/                # Pydantic request/response schemas
-│   │   ├── auth.py
-│   │   ├── user.py
-│   │   ├── csat_cycle.py
-│   │   ├── project.py
-│   │   ├── feedback.py
-│   │   ├── dashboard.py
-│   │   └── report.py
+│   │   ├── auth.py             # Login/token schemas
+│   │   ├── user.py             # User schemas
+│   │   ├── csat_cycle.py       # Cycle schemas
+│   │   ├── project.py          # Project schemas
+│   │   ├── feedback.py         # Feedback schemas
+│   │   ├── dashboard.py        # Dashboard schemas
+│   │   └── report.py           # Report schemas
 │   │
 │   ├── routers/                # API route handlers
-│   │   ├── auth.py             # POST /api/auth/*
-│   │   ├── users.py            # /api/users/*
-│   │   ├── csat_cycles.py      # /api/csat-cycles/* (Cycles & Enrollment CRUD)
-│   │   ├── projects.py         # /api/projects/*
-│   │   ├── feedback.py         # /api/feedback/* (Includes public survey endpoints)
-│   │   ├── dashboard.py        # /api/dashboard/*
-│   │   ├── reports.py          # /api/reports/*
-│   │   └── tms_sync.py         # /api/tms/*  ← TMS integration (read-only)
+│   │   ├── auth.py             # /api/auth/* endpoints
+│   │   ├── users.py            # /api/users/* endpoints
+│   │   ├── csat_cycles.py      # /api/csat-cycles/* endpoints
+│   │   ├── projects.py         # /api/projects/* endpoints
+│   │   ├── feedback.py         # /api/feedback/* endpoints
+│   │   ├── dashboard.py        # /api/dashboard/* endpoints
+│   │   ├── reports.py          # /api/reports/* endpoints
+│   │   └── tms_sync.py         # /api/tms/* endpoints
 │   │
 │   ├── services/               # Business logic layer
-│   │   ├── registration_service.py
 │   │   ├── tms_integration_service.py
 │   │   ├── feedback_request_service.py
 │   │   ├── feedback_submission_service.py
@@ -67,115 +51,174 @@ backend/
 │   │   └── audit_log_service.py
 │   │
 │   ├── core/                   # Authentication & security
-│   │   ├── security.py         # JWT, password hashing, security headers
-│   │   ├── dependencies.py     # FastAPI dependency injection
-│   │   └── rbac.py             # Role-Based Access Control
+│   │   ├── security.py         # JWT, password hashing
+│   │   ├── dependencies.py     # Dependency injection
+│   │   └── rbac.py             # Role-based access control
 │   │
-│   ├── background/             # Scheduled background jobs (Celery)
-│   │   ├── tms_sync_job.py
-│   │   ├── reminder_job.py
-│   │   └── aggregation_job.py
+│   ├── background/             # Scheduled background jobs
+│   │   ├── tms_sync_job.py     # Sync projects/tickets
+│   │   ├── reminder_job.py     # Send reminders
+│   │   └── aggregation_job.py  # Refresh analytics tables
 │   │
-│   └── utils/
-│       ├── email.py
-│       ├── token.py
-│       └── pagination.py
+│   └── utils/                  # Utility functions
+│       ├── email.py            # Email sending
+│       ├── token.py            # Token generation
+│       └── pagination.py       # Pagination helpers
 │
 ├── alembic/                    # Database migrations
-│   ├── env.py
-│   ├── versions/
-│   └── alembic.ini
+│   ├── env.py                  # Alembic environment config
+│   ├── versions/               # Migration files
+│   └── alembic.ini             # Alembic configuration
 │
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── conftest.py
+├── tests/                      # Test suite
+│   ├── unit/                   # Unit tests
+│   ├── integration/            # Integration tests
+│   └── conftest.py             # Test fixtures
 │
-├── main.py                     # Uvicorn entry point (imports app from app.main)
-├── requirements.txt
-├── .env                        # Local environment variables (git-ignored)
-└── .env.example                # Template for .env
+├── main.py                     # Entry point for uvicorn
+├── requirements.txt            # Python dependencies
+├── .env                        # Local environment variables
+├── .env.example                # Template for .env
+└── Dockerfile                  # Docker configuration
+```
 
+## Setup
 
-Setup & Running
+### Prerequisites
+- Python 3.9+
+- PostgreSQL 13+
+- pip or conda
 
-Prerequisites
+### Local Development
 
+1. **Clone and navigate:**
+   ```bash
+   cd backend
+   ```
 
-Python 3.10+
-MySQL 8+ (local instance for csat_tool_db)
-Redis (required for Celery background jobs)
-Access to TMS server (tmstestdb1) — read-only, credentials from TL
+2. **Create virtual environment:**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
+4. **Configure environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your database URL and other settings
+   ```
 
-1. Clone and navigate
+5. **Run database migrations:**
+   ```bash
+   alembic upgrade head
+   ```
 
-bashcd backend
+6. **Start development server:**
+   ```bash
+   uvicorn main:app --reload
+   ```
 
-2. Create a virtual environment
+API will be available at `http://localhost:8000`
 
-bashpython -m venv venv
+### Docker
 
-# Linux / macOS
-source venv/bin/activate
+```bash
+# Build image
+docker build -t csat-backend .
 
-# Windows
-venv\Scripts\activate
+# Run container
+docker run -p 8000:8000 \
+  -e DATABASE_URL="postgresql://user:pass@db:5432/csat_db" \
+  csat-backend
+```
 
-3. Install dependencies
+## API Documentation
 
-bashpip install -r requirements.txt
+**Interactive Swagger UI:** `http://localhost:8000/docs`
+**ReDoc:** `http://localhost:8000/redoc`
 
-4. Configure environment
+## Architecture
 
-bashcp .env.example .env
+### Layered Architecture
+1. **Routes** (`routers/`) - HTTP endpoints, request validation
+2. **Services** (`services/`) - Business logic, orchestration
+3. **Models** (`models/`) - Database schema (ORM)
+4. **Schemas** (`schemas/`) - Request/response data structures
+5. **Core** (`core/`) - Cross-cutting concerns (auth, RBAC)
 
-Open .env and fill in the required values:
+### Database
+- **Models:** Dimension (dim_*) and Fact (fact_*) tables for analytics
+- **Aggregates:** Pre-computed metrics (agg_* tables)
+- **Audit:** All changes tracked in audit_logs table
 
-env# Local MySQL (full read/write)
-LOCAL_DATABASE_URL=mysql+pymysql://csat_user:<password>@localhost:3306/csat_tool_db
+## Key Features
 
-# TMS server (read-only — do NOT write to this)
-TMS_DATABASE_URL=mysql+pymysql://<user>:<password>@<tms-host>:3306/tmstestdb1
+✅ **Authentication** - JWT-based with refresh tokens
+✅ **Authorization** - Role-Based Access Control (RBAC)
+✅ **CSAT Cycles** - Manage feedback collection periods
+✅ **Feedback Collection** - Create requests, collect responses
+✅ **Analytics** - Aggregated metrics and reporting
+✅ **TMS Integration** - Sync with external systems
+✅ **Action Plans** - Track RCA and improvements
+✅ **Audit Logs** - Compliance tracking
+✅ **Background Jobs** - Scheduled reminders, aggregation, sync
 
-# JWT
-SECRET_KEY=replace-this-with-a-strong-random-secret
-ACCESS_TOKEN_EXPIRE_MINUTES=60
-REFRESH_TOKEN_EXPIRE_DAYS=7
+## Development
 
-# App
-APP_ENV=development
-FRONTEND_URL=http://localhost:3000
+### Running Tests
+```bash
+pytest tests/
+pytest tests/unit/
+pytest tests/integration/
+```
 
+### Code Quality
+```bash
+# Format code
+black app/
 
-⚠️ Never commit your .env file. The .env.example is the safe template.
+# Check imports
+isort app/
 
+# Lint
+flake8 app/
+```
 
+### Database Migrations
+```bash
+# Create new migration
+alembic revision --autogenerate -m "Description"
 
-5. Run database migrations (local DB only)
+# Apply migration
+alembic upgrade head
 
-bashalembic upgrade head
+# Rollback
+alembic downgrade -1
+```
 
-6. Start the development server
+## Configuration
 
-bashuvicorn main:app --reload
+See `.env.example` for all configuration options:
+- Database URL
+- JWT secrets
+- SMTP settings
+- TMS integration settings
 
-The API will be available at http://localhost:8000
+## Deployment
 
+For production:
+1. Set `DEBUG=False` in .env
+2. Use strong `SECRET_KEY`
+3. Configure CORS origins
+4. Set up proper email configuration
+5. Use environment-specific database
+6. Enable HTTPS
 
-API Documentation
+## Support
 
-Once the server is running:
-
-URLDescriptionhttp://localhost:8000/docsInteractive Swagger UIhttp://localhost:8000/redocReDoc documentationhttp://localhost:8000/healthHealth check endpoint
-
-
-Database Architecture
-
-This project connects to two MySQL databases:
-
-DatabaseHostAccessPurposecsat_tool_dblocalhostRead + WriteAll CSAT datatmstestdb1TL's serverRead onlyProject/ticket sync source
-
-
-Important: Never run INSERT, UPDATE, or DELETE against tmstestdb1. Use get_tms_db() dependency only for SELECT queries.
+For issues or questions, refer to the main project README or documentation.

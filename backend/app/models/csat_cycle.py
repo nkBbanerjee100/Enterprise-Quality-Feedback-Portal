@@ -16,6 +16,10 @@ class CSATCycle(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
+<<<<<<< HEAD
+=======
+    deleted_at = Column(DateTime, nullable=True,default=None)
+>>>>>>> 2717a996be02dd42ed1b042f2f9856e5451246bf
 
     def __repr__(self):
         return f"<CSATCycle {self.cycle_name}>"
