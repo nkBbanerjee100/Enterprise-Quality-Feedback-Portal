@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { api } from '../../api/client';
 import { PageWrapper } from '../../components/layout/PageWrapper';
 
-const ALLOWED_ROLES = ['QUALITY', 'DELIVERY', 'SALES', 'MANAGER'] as const;
+const ALLOWED_ROLES = ['QUALITY', 'DELIVERY', 'SALES', 'MANAGER' , 'MANAGEMENT'] as const;
 type AllowedRole = typeof ALLOWED_ROLES[number];
 
 const AllowSchema = z.object({

@@ -16,6 +16,7 @@ const ROLE_REDIRECT: Record<string, string> = {
   [UserRole.QUALITY]:           '/admin',
   [UserRole.DELIVERY]:            '/dashboard',
   [UserRole.MANAGER]:            '/admin',
+  [UserRole.MANAGEMENT]:            '/admin',
   [UserRole.SALES]:         '/reports',
   [UserRole.CUSTOMER]:                '/feedback',
 };
