@@ -34,14 +34,14 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 #   4. Once used to complete a registration, the entry is marked
 #      is_used = 1 so it can't be reused for a second registration.
 # ============================================================
-
+ 
 def allow_user_email(email: str, role: str, allowed_by: str, local_db: Session) -> dict:
     """Admin-only: whitelist an email + role so that person can self-register."""
     existing = local_db.execute(
         text("SELECT Email, is_used FROM csat_allowed_users WHERE Email = :email LIMIT 1"),
         {"email": email},
     ).fetchone()
-
+ 
     if existing is not None:
         if existing.is_used:
             raise HTTPException(
@@ -55,7 +55,7 @@ def allow_user_email(email: str, role: str, allowed_by: str, local_db: Session) 
         )
         local_db.commit()
         return {"Email": email, "role": role, "updated": True}
-
+ 
     local_db.execute(
         text("""
             INSERT INTO csat_allowed_users (Email, role, allowed_by, is_used)
@@ -65,8 +65,8 @@ def allow_user_email(email: str, role: str, allowed_by: str, local_db: Session) 
     )
     local_db.commit()
     return {"Email": email, "role": role, "updated": False}
-
-
+ 
+ 
 def get_allowed_role_for_email(email: str, local_db: Session):
     """Returns the pre-approved role for an email, or None if not allowed / already used."""
     row = local_db.execute(
@@ -76,16 +76,16 @@ def get_allowed_role_for_email(email: str, local_db: Session):
     if row is None or row.is_used:
         return None
     return row.role
-
-
+ 
+ 
 def mark_email_used(email: str, local_db: Session) -> None:
     local_db.execute(
         text("UPDATE csat_allowed_users SET is_used = 1, used_at = :now WHERE Email = :email"),
         {"now": datetime.utcnow(), "email": email},
     )
     local_db.commit()
-
-
+ 
+ 
 def list_allowed_users(local_db: Session) -> list:
     rows = local_db.execute(
         text("""
@@ -95,12 +95,12 @@ def list_allowed_users(local_db: Session) -> list:
         """)
     ).fetchall()
     return [dict(r._mapping) for r in rows]
-
-
+ 
+ 
 # ============================================================
 # Check if already registered locally
 # ============================================================
-
+ 
 def is_already_registered(emp_id: str, local_db: Session) -> bool:
     """Check if EmpId already exists in local csat_users"""
     query = text("""
@@ -181,7 +181,7 @@ def register_user_locally(
 #      below) by proving their identity (email + first/last name) and
 #      choosing their own password.
 # ============================================================
-
+ 
 def _generate_emp_id(email: str, local_db: Session) -> str:
     """Derive a unique EmpId from the email's local part, e.g.
     'sanjukta.mandal@mindteck.com' -> 'SANJUKTA.MANDAL' (deduped if needed)."""
@@ -197,8 +197,8 @@ def _generate_emp_id(email: str, local_db: Session) -> str:
             return candidate
         suffix += 1
         candidate = f"{base}{suffix}"
-
-
+ 
+ 
 def pre_register_employee(
     emp_data: dict,
     local_db: Session,
@@ -223,13 +223,13 @@ def pre_register_employee(
             status_code=status.HTTP_409_CONFLICT,
             detail="This email has already been invited. Ask them to activate their account.",
         )
-
+ 
     emp_id = _generate_emp_id(emp_data["Email"], local_db)
-
+ 
     # Unusable placeholder hash — no plaintext produces it, so the
     # account can't be logged into until activate_employee() runs.
     placeholder_hash = pwd_context.hash(secrets.token_urlsafe(32))
-
+ 
     query = text("""
         INSERT INTO csat_users (
             EmpId, EmpFirstName, EmpMiddleName, EmpLastName,
@@ -252,7 +252,7 @@ def pre_register_employee(
         "role":           emp_data.get("role") or "QUALITY",
     })
     local_db.commit()
-
+ 
     return {
         "EmpId":        emp_id,
         "EmpFirstName": emp_data["EmpFirstName"],
@@ -260,8 +260,8 @@ def pre_register_employee(
         "Email":        emp_data["Email"],
         "role":         emp_data.get("role") or "QUALITY",
     }
-
-
+ 
+ 
 # ============================================================
 # EMPLOYEE ACTIVATION
 # ============================================================
@@ -283,19 +283,19 @@ def activate_employee(
         """),
         {"email": email},
     ).fetchone()
-
+ 
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No invitation found for this email. Contact your admin.",
         )
-
+ 
     if row.is_registered:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This account is already activated. Please log in instead.",
         )
-
+ 
     # Identity check — must match what the admin entered (case-insensitive)
     if (row.EmpFirstName or "").strip().lower() != emp_first_name.strip().lower() or \
        (row.EmpLastName or "").strip().lower() != emp_last_name.strip().lower():
@@ -303,9 +303,9 @@ def activate_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Name doesn't match our records for this email. Contact your admin.",
         )
-
+ 
     hashed_password = pwd_context.hash(password)
-
+ 
     local_db.execute(
         text("""
             UPDATE csat_users
@@ -315,14 +315,14 @@ def activate_employee(
         {"hashed_password": hashed_password, "email": email},
     )
     local_db.commit()
-
+ 
     return {
         "EmpId":        row.EmpId,
         "EmpFirstName": row.EmpFirstName,
         "Email":        row.Email,
     }
-
-
+ 
+ 
 # ============================================================
 # Main Registration Function — used by the router
 # ============================================================
@@ -336,7 +336,7 @@ def register_new_user(
     allow-list check (email must be pre-approved by an admin) →
     local duplicate check → local register → mark allow-list entry used
     """
-
+ 
     # Gate: this email must have been pre-approved by Quality/Manager
     # via the "Allow User" page. The role is taken from the allow-list,
     # NOT from whatever the person typed in the form — this is what
@@ -348,41 +348,41 @@ def register_new_user(
             detail="This email is not authorized to register. Ask your Quality/Management team to allow it first.",
         )
     emp_data["role"] = allowed_role
-
+ 
     # Already registered?
     if is_already_registered(emp_data["EmpId"], local_db):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This Employee ID is already registered. Please login instead."
         )
-
+ 
     # Register locally
     user = register_user_locally(emp_data, password, local_db)
-
+ 
     # Consume the allow-list entry so it can't be reused
     mark_email_used(emp_data["Email"], local_db)
-
+ 
     user["role"] = allowed_role
     return user
  
-
+ 
 # ============================================================
 # Blacklisted tokens (in-memory store for logout)
 # In production, use Redis or a DB table instead
 # ============================================================
 _blacklisted_tokens: set = set()
-
-
+ 
+ 
 def blacklist_token(token: str) -> None:
     """Add a token to the blacklist (logout)"""
     _blacklisted_tokens.add(token)
-
-
+ 
+ 
 def is_token_blacklisted(token: str) -> bool:
     """Check if a token has been blacklisted"""
     return token in _blacklisted_tokens
-
-
+ 
+ 
 # ============================================================
 # Login Service
 # ============================================================
@@ -394,7 +394,7 @@ def login_user(email: str, password: str, local_db: Session) -> dict:
     3. Check user is active and registered
     4. Generate and return JWT access + refresh tokens
     """
-
+ 
     # Step 1 — fetch user by email
     query = text("""
         SELECT EmpId, EmpFirstName, EmpLastName, Email,
@@ -404,33 +404,33 @@ def login_user(email: str, password: str, local_db: Session) -> dict:
         LIMIT 1
     """)
     row = local_db.execute(query, {"email": email}).fetchone()
-
+ 
     if not row:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
-
+ 
     # Step 2 — verify password
     if not verify_password(password, row.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
-
+ 
     # Step 3 — check account is active and registered
     if not row.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been deactivated. Contact admin.",
         )
-
+ 
     if not row.is_registered:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account registration is incomplete.",
         )
-
+ 
     # Step 4 — generate JWT tokens
     token_data = {
         "sub": row.EmpId,
@@ -439,14 +439,14 @@ def login_user(email: str, password: str, local_db: Session) -> dict:
     }
     access_token  = create_access_token(data=token_data)
     refresh_token = create_refresh_token(data=token_data)
-
+ 
     # Update last_login_at
     local_db.execute(
         text("UPDATE csat_users SET last_login_at = :now WHERE Email = :email"),
         {"now": datetime.utcnow(), "email": email},
     )
     local_db.commit()
-
+ 
     return {
         "access_token":  access_token,
         "refresh_token": refresh_token,

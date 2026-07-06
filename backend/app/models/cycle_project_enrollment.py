@@ -16,6 +16,18 @@ class EligibilityStatus(str, enum.Enum):
     DECLINED = "declined"          # manager declined → removed from cycle
 
 
+class AdditionApprovalStatus(str, enum.Enum):
+    """
+    Separate from EligibilityStatus / the exemption-approval flow above.
+    Gates the *addition* of a project to a cycle: whenever Quality/Management
+    enrolls a project, Management + the project's Manager (PM) are notified
+    and must approve the addition itself before it's considered confirmed.
+    """
+    PENDING = "pending"
+    APPROVED = "approved"
+    DECLINED = "declined"
+
+
 class CycleProjectEnrollment(Base):
     """Join table: csat_cycles ↔ dim_projects with eligibility tracking"""
     __tablename__ = "cycle_project_enrollments"
@@ -34,12 +46,23 @@ class CycleProjectEnrollment(Base):
     enrolled_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
-    # Manager approval fields
+    # Manager approval fields (exemption → pending_approval → approved/declined flow)
     approval_requested_at = Column(DateTime, nullable=True)
     approval_requested_by = Column(String(50), nullable=True)
     approved_or_declined_by = Column(String(50), nullable=True)
     approved_or_declined_at = Column(DateTime, nullable=True)
     manager_remarks = Column(Text, nullable=True)
+
+    # ── Addition-approval fields (separate flow — gates the act of adding a
+    #    project to the cycle at all, not its eligibility) ─────────────────
+    addition_approval_status = Column(
+        String(30),
+        default=AdditionApprovalStatus.PENDING,
+        nullable=False,
+    )
+    addition_approved_by = Column(String(50), nullable=True)   # emp_id of Management/Manager who decided
+    addition_approved_at = Column(DateTime, nullable=True)
+    addition_decision_remarks = Column(Text, nullable=True)
 
     def __repr__(self):
         return f"<CycleProjectEnrollment cycle={self.cycle_id} project={self.project_id} status={self.eligibility_status}>"

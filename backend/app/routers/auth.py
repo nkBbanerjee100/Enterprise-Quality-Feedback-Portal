@@ -5,7 +5,7 @@ from sqlalchemy import text
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
 from datetime import timedelta
-
+ 
 from app.database import get_local_db
 from app.services.registration_service import (
     register_new_user,
@@ -22,20 +22,20 @@ from app.core.security import (
 )
 from app.core.dependencies import get_current_user, require_role
 from app.config import settings
-
+ 
 router = APIRouter()
-
+ 
 # ============================================================
 # In-memory token blacklist for logout
 # (For production: use Redis or a DB table instead)
 # ============================================================
 _token_blacklist: set = set()
-
-
+ 
+ 
 # ============================================================
 # Pydantic Schemas
 # ============================================================
-
+ 
 class RegisterRequest(BaseModel):
     emp_id: str
     emp_first_name: str
@@ -50,64 +50,64 @@ class RegisterRequest(BaseModel):
     role: Optional[str] = None
     password: str
     confirm_password: str
-
+ 
     @field_validator("emp_id")
     def emp_id_not_empty(cls, v):
         if not v.strip():
             raise ValueError("Employee ID cannot be empty")
         return v.strip()
-
+ 
     @field_validator("emp_first_name", "emp_last_name")
     def name_not_empty(cls, v):
         if not v.strip():
             raise ValueError("Name fields cannot be empty")
         return v.strip()
-
+ 
     @field_validator("gender")
     def gender_valid(cls, v):
         if v.upper() not in ("M", "F", "OTHER"):
             raise ValueError("Gender must be M, F, or OTHER")
         return v.upper()
-
+ 
     @field_validator("password")
     def password_strength(cls, v):
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
         return v
-
+ 
     @field_validator("confirm_password")
     def passwords_must_match(cls, v, values):
         if "password" in values.data and v != values.data["password"]:
             raise ValueError("Passwords do not match")
         return v
-
-
+ 
+ 
 class RegisterResponse(BaseModel):
     message: str
     emp_id: str
     name: str
     email: str
-
-
+ 
+ 
 # ── Admin: allow an email + role to self-register ────────────────
 class AllowUserRequest(BaseModel):
     email: EmailStr
     role:  str
-
+ 
     @field_validator("role")
     def role_must_be_allowed(cls, v):
-        allowed = {"QUALITY", "DELIVERY", "SALES", "CUSTOMER", "MANAGER"}
+        allowed = {"QUALITY", "DELIVERY", "SALES", "CUSTOMER", "MANAGER" , "MANAGEMENT"}
         if v not in allowed:
             raise ValueError(f"Role '{v}' is not a valid role.")
         return v
-
-
+ 
+ 
 class AllowUserResponse(BaseModel):
     message: str
     email: str
     role: str
-
-
+ 
+ 
 class AllowedUserItem(BaseModel):
     Email: str
     role: str
@@ -115,12 +115,12 @@ class AllowedUserItem(BaseModel):
     is_used: bool
     created_at: Optional[str] = None
     used_at: Optional[str] = None
-
-
+ 
+ 
 class AllowedUsersListResponse(BaseModel):
     users: list[AllowedUserItem]
-
-
+ 
+ 
 # ── Admin pre-registration (invite) ─────────────────────────────
 class PreRegisterRequest(BaseModel):
     emp_first_name:  str
@@ -129,35 +129,35 @@ class PreRegisterRequest(BaseModel):
     email:            EmailStr
     gender:           Optional[str] = "M"
     role:             Optional[str] = "QUALITY"
-
+ 
     @field_validator("role")
     def role_must_be_allowed(cls, v):
-        allowed = {"QUALITY", "DELIVERY", "SALES", "CUSTOMER", "MANAGER"}
+        allowed = {"QUALITY", "DELIVERY", "SALES", "CUSTOMER", "MANAGER" , "MANAGEMENT"}
         if v not in allowed:
             raise ValueError(f"Role '{v}' is not a valid role.")
         return v
-
+ 
     @field_validator("emp_first_name", "emp_last_name")
     def name_not_empty(cls, v):
         if not v.strip():
             raise ValueError("Name fields cannot be empty")
         return v.strip()
-
+ 
     @field_validator("gender")
     def gender_valid(cls, v):
         if v and v.upper() not in ("M", "F", "OTHER"):
             raise ValueError("Gender must be M, F, or OTHER")
         return (v or "M").upper()
-
-
+ 
+ 
 class PreRegisterResponse(BaseModel):
     message: str
     emp_id: str
     name: str
     email: str
     role: str
-
-
+ 
+ 
 # ── Employee self-activation ────────────────────────────────────
 class ActivateRequest(BaseModel):
     email:             EmailStr
@@ -165,31 +165,31 @@ class ActivateRequest(BaseModel):
     emp_last_name:     str
     password:          str
     confirm_password:  str
-
+ 
     @field_validator("password")
     def password_strength(cls, v):
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
         return v
-
+ 
     @field_validator("confirm_password")
     def passwords_must_match(cls, v, values):
         if "password" in values.data and v != values.data["password"]:
             raise ValueError("Passwords do not match")
         return v
-
-
+ 
+ 
 class ActivateResponse(BaseModel):
     message: str
     emp_id: str
     email: str
-
-
+ 
+ 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-
-
+ 
+ 
 class LoginResponse(BaseModel):
     message: str
     access_token: str
@@ -199,29 +199,29 @@ class LoginResponse(BaseModel):
     name: str
     email: str
     role: str
-
-
+ 
+ 
 class LogoutRequest(BaseModel):
     access_token: str
-
-
+ 
+ 
 class LogoutResponse(BaseModel):
     message: str
-
-
+ 
+ 
 class MeUser(BaseModel):
     id: str
     email: str
     displayName: str
-
-
+ 
+ 
 class MeResponse(BaseModel):
     user: MeUser
     role: str
     permissions: list[str]
     defaultRoute: str
-
-
+ 
+ 
 # ============================================================
 # Role → permissions + default route map
 # ============================================================
@@ -236,6 +236,14 @@ _ROLE_CONFIG: dict = {
         "defaultRoute": "/dashboard",
     },
     "MANAGER": {
+        "permissions": [
+            "VIEW_PROJECTS", "SEND_FEEDBACK", "RESEND_FEEDBACK",
+            "VIEW_REPORTS", "EXPORT_REPORTS", "MANAGE_USERS",
+            "VIEW_AUDIT_LOGS", "MANAGE_SETTINGS",
+        ],
+        "defaultRoute": "/dashboard",
+    },
+    "MANAGEMENT": {
         "permissions": [
             "VIEW_PROJECTS", "SEND_FEEDBACK", "RESEND_FEEDBACK",
             "VIEW_REPORTS", "EXPORT_REPORTS", "MANAGE_USERS",
@@ -265,13 +273,13 @@ _ROLE_CONFIG: dict = {
         "defaultRoute": "/unauthorized",
     },
 }
-
-
+ 
+ 
 # ============================================================
-# POST /api/auth/register-self
+# POST /api/auth/register
 # ============================================================
 @router.post(
-    "/register-self",
+    "/register",
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Register new user",
@@ -289,21 +297,21 @@ async def register(
         "EmpMiddleName": payload.emp_middle_name,
         "role":         payload.role,
     }
-
+ 
     user = register_new_user(
         emp_data=emp_data,
         password=payload.password,
         local_db=local_db,
     )
-
+ 
     return RegisterResponse(
         message="Registration successful! You can now login.",
         emp_id=user["EmpId"],
         name=user["EmpFirstName"],
         email=user["Email"],
     )
-
-
+ 
+ 
 # ============================================================
 # POST /api/auth/allow-user  (Admin: Quality / Manager only)
 # ============================================================
@@ -321,7 +329,7 @@ async def register(
 async def allow_user(
     payload: AllowUserRequest,
     local_db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER")),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
 ):
     result = allow_user_email(
         email=payload.email,
@@ -334,8 +342,8 @@ async def allow_user(
         email=result["Email"],
         role=result["role"],
     )
-
-
+ 
+ 
 # ============================================================
 # GET /api/auth/allowed-users  (Admin: Quality / Manager only)
 # ============================================================
@@ -347,7 +355,7 @@ async def allow_user(
 )
 async def get_allowed_users(
     local_db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER")),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGER"  , "MANAGEMENT")),
 ):
     rows = list_allowed_users(local_db)
     users = [
@@ -362,8 +370,8 @@ async def get_allowed_users(
         for r in rows
     ]
     return AllowedUsersListResponse(users=users)
-'''
-
+ 
+ 
 # ============================================================
 # POST /api/auth/pre-register  (Admin / Quality / Manager only)
 # ============================================================
@@ -378,7 +386,7 @@ async def get_allowed_users(
 async def pre_register(
     payload: PreRegisterRequest,
     local_db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER")),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
 ):
     emp_data = {
         "EmpFirstName":  payload.emp_first_name,
@@ -388,9 +396,9 @@ async def pre_register(
         "Gender":        payload.gender,
         "role":          payload.role,
     }
-
+ 
     user = pre_register_employee(emp_data=emp_data, local_db=local_db)
-
+ 
     return PreRegisterResponse(
         message="Employee invited! They can now activate their account with this email.",
         emp_id=user["EmpId"],
@@ -398,13 +406,12 @@ async def pre_register(
         email=user["Email"],
         role=user["role"],
     )
-'''
-
-
+ 
+ 
 # ============================================================
 # POST /api/auth/activate  (Public — for invited employees)
 # ============================================================
-'''@router.post(
+@router.post(
     "/activate",
     response_model=ActivateResponse,
     status_code=status.HTTP_200_OK,
@@ -421,14 +428,14 @@ async def activate(
         password=payload.password,
         local_db=local_db,
     )
-
+ 
     return ActivateResponse(
         message="Account activated! You can now log in.",
         emp_id=user["EmpId"],
         email=user["Email"],
     )
-'''
-
+ 
+ 
 # ============================================================
 # POST /api/auth/login
 # ============================================================
@@ -457,52 +464,52 @@ async def login(
         LIMIT 1
     """)
     row = local_db.execute(query, {"email": payload.email}).fetchone()
-
+ 
     # 2. User not found
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
-
+ 
     # 3. Account was only invited by admin, not yet activated by the employee
     if not row.is_registered:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account hasn't been activated yet. Please complete activation first.",
         )
-
+ 
     # 4. Wrong password
     if not verify_password(payload.password, row.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
-
+ 
     # 5. Account inactive
     if not row.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account is inactive. Please contact the administrator.",
         )
-
+ 
     # 5. Build JWT payload  (sub = EmpId, role for RBAC checks later)
     token_data = {
         "sub":  row.EmpId,
         "email": row.Email,
         "role":  row.role,
     }
-
+ 
     access_token  = create_access_token(data=token_data)
     refresh_token = create_refresh_token(data=token_data)
-
+ 
     # 6. Update last_login_at
     local_db.execute(
         text("UPDATE csat_users SET last_login_at = NOW() WHERE EmpId = :emp_id"),
         {"emp_id": row.EmpId},
     )
     local_db.commit()
-
+ 
     return LoginResponse(
         message="Login successful!",
         access_token=access_token,
@@ -513,8 +520,8 @@ async def login(
         email=row.Email,
         role=row.role,
     )
-
-
+ 
+ 
 # ============================================================
 # POST /api/auth/logout
 # ============================================================
@@ -532,10 +539,10 @@ async def login(
 )
 async def logout():
     # 1. Decode to validate the token first
-
+ 
     return LogoutResponse(message="Logged out successfully. Have a great day!")
-
-
+ 
+ 
 # ============================================================
 # GET /api/auth/me
 # ============================================================
@@ -548,7 +555,7 @@ async def logout():
     Called by the frontend on every app startup / page refresh.
     Returns user identity, role, permissions, and the default route
     so the frontend knows which page to open.
-
+ 
     Returns 401 if the token is missing, expired, or blacklisted.
     """,
 )
@@ -560,7 +567,7 @@ async def get_me(
         "permissions": [],
         "defaultRoute": "/",
     })
-
+ 
     return MeResponse(
         user=MeUser(
             id=current_user["emp_id"],
