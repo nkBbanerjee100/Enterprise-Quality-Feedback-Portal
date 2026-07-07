@@ -645,16 +645,12 @@ export const CsatCycleDetailPage: React.FC = () => {
   // already permits MANAGEMENT for these actions — without it, Management
   // would never see the Actions column at all, including the new
   // "Approve Addition" button. Added to match actual backend permissions.
-  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGER
-    || user?.role === UserRole.DELIVERY || user?.role === UserRole.SALES
-    || user?.role === UserRole.MANAGEMENT;
+  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.DELIVERY 
+    || user?.role === UserRole.SALES || user?.role === UserRole.MANAGEMENT;
   const isManager = user?.role === UserRole.MANAGER;
-  // Only Quality and Management add projects to a cycle — Managers approve
-  // additions but don't initiate them.
+  // Only Quality and Management add projects to a cycle
   const canAddProjects = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT;
-  // Send Feedback is Quality/Management (+ Delivery/Sales, unchanged) — not
-  // Manager, who has a separate plan for this, not yet built.
-  const canSendFeedback = canManage && !isManager;
+  const canSendFeedback = canManage;
 
   const [statusFilter, setStatusFilter] = useState<'all' | RowStatus>(initialFilter);
   const [showHowThisWorks, setShowHowThisWorks] = useState(false);
@@ -927,6 +923,14 @@ export const CsatCycleDetailPage: React.FC = () => {
               // since the one scenario they existed for (undoing a manual
               // "Mark Exempted" click) no longer exists on this page.
               const menuItems: { label: string; onClick: () => void; disabled?: boolean }[] = [];
+              if (canManage && !isManagerDecided(project)) {
+                if (status === 'not-eligible') {
+                  menuItems.push(
+                    { label: 'Make eligible', onClick: () => markEligibleMutation.mutate(project.enrollment_id), disabled: markEligibleMutation.isPending },
+                    { label: 'Request approval', onClick: () => requestApprovalMutation.mutate(project.enrollment_id), disabled: requestApprovalMutation.isPending },
+                  );
+                }
+              }
 
               return (
                 <div key={project.enrollment_id} className="flex items-center gap-4 px-4 py-3.5">
@@ -987,7 +991,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                         </button>
                       )}
 
-                      {project.eligibility_status === 'pending_approval' && isManager && (
+                      {project.eligibility_status === 'pending_approval' && user?.role === UserRole.MANAGEMENT && (
                         <button
                           onClick={() => setApprovalTarget(project)}
                           className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white whitespace-nowrap"
