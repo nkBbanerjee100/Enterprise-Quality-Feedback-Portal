@@ -8,6 +8,7 @@ import { PageWrapper } from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { csatCyclesApi } from '../../api/csat-cycles.api';
 import { projectsApi } from '../../api/projects.api';
+import { projectStagingApi } from '../../api/project-staging.api';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
 import { EnrolledProject } from '../../types/csat-cycle.types';
@@ -121,6 +122,8 @@ function EnrollModal({
   const { user } = useAuthStore();
   const isManagement = user?.role === UserRole.MANAGEMENT;
   const [search, setSearch] = useState('');
+  const [pmFilter, setPmFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
   const [tally, setTally] = useState({ eligible: 0, not_sure: 0, exempted: 0 });
 
@@ -130,11 +133,22 @@ function EnrollModal({
     staleTime: 0, // always fresh when modal opens
   });
 
+  // Same manager list the Select Projects page uses — independent of any
+  // staging pool, just distinct PMs across all TMS projects.
+  const { data: managers } = useQuery({
+    queryKey: ['staging-managers'],
+    queryFn: () => projectStagingApi.listManagers(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const yearOptions = Array.from({ length: 11 }, (_, i) => new Date().getFullYear() - i);
+
   const { activeProjects, completedProjects } = useMemo(() => {
     const projects = (data as any)?.projects ?? [];
     const available = projects.filter((p: any) =>
       !enrolledIds.has(p.project_id) &&
-      (search === '' || p.project_name.toLowerCase().includes(search.toLowerCase()))
+      (search === '' || p.project_name.toLowerCase().includes(search.toLowerCase())) &&
+      (pmFilter === '' || p.project_manager_emp_id === pmFilter) &&
+      (yearFilter === '' || (p.start_date && new Date(p.start_date).getFullYear() === Number(yearFilter)))
     );
     const active: any[] = [];
     const completed: any[] = [];
@@ -159,7 +173,7 @@ function EnrollModal({
     active.sort((a, b) => a.project_name.localeCompare(b.project_name));
     completed.sort((a, b) => a.project_name.localeCompare(b.project_name));
     return { activeProjects: active, completedProjects: completed };
-  }, [data, enrolledIds, search]);
+  }, [data, enrolledIds, search, pmFilter, yearFilter]);
 
   const totalFiltered = activeProjects.length + completedProjects.length;
 
@@ -231,6 +245,33 @@ function EnrollModal({
             onChange={e => setSearch(e.target.value)}
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
           />
+
+          <div className="flex gap-2 mt-2">
+            <select
+              value={pmFilter}
+              onChange={e => setPmFilter(e.target.value)}
+              className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-green-200"
+            >
+              <option value="">All project managers</option>
+              {(managers ?? []).map(pm => <option key={pm.emp_id} value={pm.emp_id}>{pm.name}</option>)}
+            </select>
+            <select
+              value={yearFilter}
+              onChange={e => setYearFilter(e.target.value)}
+              className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-green-200"
+            >
+              <option value="">All years</option>
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            {(pmFilter || yearFilter) && (
+              <button
+                onClick={() => { setPmFilter(''); setYearFilter(''); }}
+                className="text-xs text-gray-400 hover:text-gray-600 whitespace-nowrap px-1"
+              >
+                Clear
+              </button>
+            )}
+          </div>
 
           {/* Live tally — updates the instant an action succeeds, not just
               after "Done" is clicked. Also confirms the most recent action
@@ -641,18 +682,6 @@ export const CsatCycleDetailPage: React.FC = () => {
     qc.invalidateQueries({ queryKey: ['cycle-projects', cycleId] });
   };
 
-  const markEligibleMutation = useMutation({
-    mutationFn: (enrollmentId: number) =>
-      csatCyclesApi.setEligibility(cycleId, enrollmentId, { eligibility_status: 'eligible' }),
-    onSuccess: invalidate,
-  });
-
-  const requestApprovalMutation = useMutation({
-    mutationFn: (enrollmentId: number) =>
-      csatCyclesApi.requestManagerApproval(cycleId, enrollmentId),
-    onSuccess: invalidate,
-  });
-
   // Enrolled TMS IDs — used to exclude already-enrolled projects from the Add modal.
   // Always derived from the full unfiltered list.
   const allProjects = projectsData?.data ?? [];
@@ -670,6 +699,15 @@ export const CsatCycleDetailPage: React.FC = () => {
   //   - exempted + decided  → no actions at all (manager declined it; final)
   //   - not decided (fresh) → the normal action set applies
   const isManagerDecided = (p: EnrolledProject) => !!p.approved_or_declined_at;
+  // Covers BOTH ways a project can end up "Not eligible" as a final,
+  // no-further-action decision: the exemption-escalation flow's
+  // manager_decision (approved_or_declined_at set), and Management
+  // declining the addition itself outright (addition_approval_status ===
+  // 'declined'). Previously only the first case hid Make eligible/Send to
+  // manager — an addition-declined project still showed those, wrongly
+  // implying it wasn't actually final.
+  const isFinallyDeclined = (p: EnrolledProject) =>
+    isManagerDecided(p) || p.addition_approval_status === 'declined';
 
   // Counts per unified status, computed from the full unfiltered dataset so
   // they stay accurate regardless of which filter pill is currently active.
@@ -705,7 +743,7 @@ export const CsatCycleDetailPage: React.FC = () => {
       return `Ready · added ${formatDate(p.enrolled_at)}`;
     }
     // not-eligible
-    if (isManagerDecided(p)) return 'Manager declined · marked not eligible';
+    if (isFinallyDeclined(p)) return 'Declined · marked not eligible';
     if (p.exemption_reason) return p.exemption_reason;
     return 'Marked not eligible';
   };
@@ -861,19 +899,20 @@ export const CsatCycleDetailPage: React.FC = () => {
               // "Make eligible" / "Send to manager" below stay, since those
               // handle rows that arrive already exempted (e.g. added to an
               // existing cycle directly, bypassing staging).
+              // "Not eligible" is now always the result of a deliberate,
+              // final decision by whoever's authorized to make it — Quality
+              // at pre-cycle staging triage, Management declining an
+              // addition, or a Manager declining an exemption escalation.
+              // There's no remaining path here that should be reconsiderable
+              // or re-escalatable from this menu, so not-eligible rows get
+              // no menu items at all (RowMenu renders nothing for an empty
+              // list). This replaced trying to detect "was this a final
+              // decision" per-path (isManagerDecided, addition declined,
+              // staging-exempt, ...) — that kept missing cases; simpler and
+              // more correct to just not offer the actions at all anymore,
+              // since the one scenario they existed for (undoing a manual
+              // "Mark Exempted" click) no longer exists on this page.
               const menuItems: { label: string; onClick: () => void; disabled?: boolean }[] = [];
-              if (canManage && !isManager && !isManagerDecided(project)) {
-                if (status === 'not-eligible') {
-                  menuItems.push(
-                    { label: 'Make eligible', onClick: () => markEligibleMutation.mutate(project.enrollment_id), disabled: markEligibleMutation.isPending },
-                    // "Send to manager" broadcasts to everyone with role
-                    // MANAGER — any of them can decide, not just this
-                    // project's specific PM — so this no longer needs a PM
-                    // to be assigned in TMS to make sense.
-                    { label: 'Send to manager', onClick: () => requestApprovalMutation.mutate(project.enrollment_id), disabled: requestApprovalMutation.isPending },
-                  );
-                }
-              }
 
               return (
                 <div key={project.enrollment_id} className="flex items-center gap-4 px-4 py-3.5">
