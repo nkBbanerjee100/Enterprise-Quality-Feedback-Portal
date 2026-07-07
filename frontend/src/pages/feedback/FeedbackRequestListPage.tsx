@@ -210,6 +210,13 @@ const ResponseDrawer: React.FC<{ requestId: number | null; onClose: () => void }
                       </div>
                     ))}
 
+                    {responseData.clientManagerComments && (
+                      <div style={{ background: BRAND.surface, border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: '14px 16px' }}>
+                        <p style={{ fontSize: 11, color: BRAND.textLight, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 8px' }}>Client Manager Comments</p>
+                        <p style={{ fontSize: 13, color: BRAND.textDark, margin: 0, lineHeight: 1.6 }}>{responseData.clientManagerComments}</p>
+                      </div>
+                    )}
+
                     {responseData.areasToCompliment && (
                       <div style={{ background: BRAND.surface, border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: '14px 16px' }}>
                         <p style={{ fontSize: 11, color: BRAND.textLight, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 8px' }}>Areas to Compliment</p>
