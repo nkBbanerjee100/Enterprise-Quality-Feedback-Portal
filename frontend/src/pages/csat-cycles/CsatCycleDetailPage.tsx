@@ -955,7 +955,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                         </button>
                       )}
 
-                      {status === 'ready' && canSendFeedback && (
+                      {status === 'ready' && canSendFeedback && !project.feedback_request_id && (
                         <button
                           onClick={() => navigate('/feedback/send', {
                             state: { cycleId, projectId: Number(project.project_ext_id), enrollmentId: project.enrollment_id },
@@ -964,6 +964,26 @@ export const CsatCycleDetailPage: React.FC = () => {
                           style={{ background: BRAND.green }}
                         >
                           Send feedback →
+                        </button>
+                      )}
+
+                      {project.feedback_request_id && (
+                        <button
+                          onClick={() => navigate('/feedback')}
+                          className="px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap flex items-center gap-1"
+                          style={{ 
+                            background: (project.feedback_status === 'sent' || project.feedback_status === 'completed') ? '#E5E7EB' : BRAND.green,
+                            color: (project.feedback_status === 'sent' || project.feedback_status === 'completed') ? '#4B5563' : '#fff',
+                            border: (project.feedback_status === 'sent' || project.feedback_status === 'completed') ? '1px solid #D1D5DB' : 'none'
+                          }}
+                        >
+                          {project.feedback_status === 'sent' || project.feedback_status === 'completed' 
+                            ? 'Feedback Sent' 
+                            : project.pm_approval_status === 'pending_pm' 
+                              ? 'Pending PM Approval' 
+                              : project.pm_approval_status === 'approved'
+                                ? 'Approved (Go to Send)'
+                                : 'View Feedback'}
                         </button>
                       )}
 

@@ -26,6 +26,10 @@ class FeedbackRequest(Base):
     created_at = Column(DateTime, server_default=func.now())
     period_of_performance = Column(String(255), nullable=True)
     pm_achievements = Column(Text, nullable=True)
+    
+    # ── PM Approval Workflow ───────────────────────────────────────────────────
+    pm_approval_status = Column(String(50), default="draft", nullable=False) # draft, pending_pm, approved, rejected
+    pm_rejection_comments = Column(Text, nullable=True)
 
     def __repr__(self):
         return f"<FeedbackRequest {self.recipient_email}>"

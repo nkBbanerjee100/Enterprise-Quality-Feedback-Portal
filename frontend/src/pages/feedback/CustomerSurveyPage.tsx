@@ -20,6 +20,7 @@ interface SurveyMeta {
   projectCode:         string;
   periodOfPerformance: string | null;
   pmAchievements:      string | null;
+  pmName:              string;
 }
 
 const CORE_QUESTIONS = [
@@ -148,6 +149,23 @@ export const CustomerSurveyPage: React.FC = () => {
       })
       .catch(() => setStep('error'));
   }, [token]);
+
+  // ── Auto-calculate Overall Rating ──────────────────────────────────────
+  useEffect(() => {
+    const numericRatings = Object.values(ratings).filter(r => typeof r === 'number') as number[];
+    if (numericRatings.length > 0) {
+      const avg = numericRatings.reduce((sum, val) => sum + val, 0) / numericRatings.length;
+      setOverallRating(Math.round(avg));
+    } else {
+      setOverallRating(null);
+    }
+    
+    setErrors(e => {
+      const ne = { ...e };
+      delete ne.overallRating;
+      return ne;
+    });
+  }, [ratings]);
 
   // ── Handlers & Validation ──────────────────────────────────────────────
   const handleRatingChange = (id: string, value: number | 'N/A') => {
@@ -286,15 +304,7 @@ export const CustomerSurveyPage: React.FC = () => {
               <p className="text-green-100 text-sm font-medium">Your feedback helps us improve and deliver excellence.</p>
             </div>
 
-            {/* Top Right: Secure Badge */}
-            <div className="bg-white rounded-lg p-2.5 px-4 flex items-center space-x-3 shadow-sm self-end md:self-auto hidden md:flex">
-              <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.95 11.95 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-              </svg>
-              <div className="text-xs font-medium text-gray-700 leading-tight">
-                Your responses are<br/><span className="font-bold text-gray-900">secure & confidential</span>
-              </div>
-            </div>
+
           </div>
         </div>
       </div>
@@ -360,13 +370,22 @@ export const CustomerSurveyPage: React.FC = () => {
 
           {/* SECTION 2: Overviews */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="border border-green-200 rounded-lg p-1 bg-[#fcfdfc]">
-              <div className="flex items-center space-x-2 p-3 pb-2 text-gray-800 font-semibold text-sm">
-                <DocumentIcon />
-                <span>Overview on Project Performance</span>
+            <div className="border-2 border-green-300 rounded-lg overflow-hidden bg-[#fcfdfc]">
+              <div className="bg-green-50 px-4 py-2.5 flex items-center justify-between border-b border-green-200">
+                <div className="flex items-center space-x-2 text-gray-800 font-semibold text-sm">
+                  <DocumentIcon />
+                  <span>Overview on Project Performance</span>
+                </div>
+                <div className="flex items-center space-x-1 bg-white border border-green-300 rounded-full px-2.5 py-1">
+                  <span className="text-[10px] font-bold text-green-700 uppercase tracking-wide whitespace-nowrap">Filled by {meta?.pmName || 'Project Manager'}</span>
+                </div>
               </div>
-              <div className="border border-gray-200 bg-white rounded p-4 m-1 min-h-[100px] text-sm text-gray-500">
-                {meta?.pmAchievements || '<Provision for PM to enter his team’s achievements during the CSAT period>'}
+              <div className="bg-[#F9FDFB] p-4 min-h-[100px] text-sm cursor-not-allowed">
+                {meta?.pmAchievements ? (
+                  <p className="text-gray-700 leading-relaxed whitespace-pre-wrap m-0">{meta.pmAchievements}</p>
+                ) : (
+                  <p className="text-gray-400 italic m-0">The Project Manager's team achievements for this CSAT period will appear here.</p>
+                )}
               </div>
             </div>
             
@@ -472,26 +491,27 @@ export const CustomerSurveyPage: React.FC = () => {
 
           {/* SECTION 4: Overall Rating & Assessment */}
           <div className="space-y-4">
-            <div className={`border rounded-lg p-4 flex items-center justify-between bg-green-50/50 ${errors.overallRating ? 'border-red-400' : 'border-green-200'}`}>
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded bg-[#0b5c36] text-white flex items-center justify-center">
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>
+            <div className={`border rounded-lg p-2 flex items-center justify-between bg-green-50/50 ${errors.overallRating ? 'border-red-400' : 'border-green-200'}`}>
+              <div className="flex items-center space-x-2 pl-2">
+                <div className="w-8 h-8 rounded bg-[#0b5c36] text-white flex items-center justify-center">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>
                 </div>
                 <div>
-                  <h3 className="font-bold text-[#0b5c36] text-lg">Overall Rating on a scale of 1–10</h3>
-                  <p className="text-xs text-[#0b5c36] opacity-80">(1 - lowest and 10 – highest)</p>
+                  <h3 className="font-bold text-[#0b5c36] text-base">Overall Rating on a scale of 1–10</h3>
                 </div>
               </div>
               <div className="flex space-x-6 pr-4">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(val => (
-                  <label key={val} className="flex items-center cursor-pointer space-x-2">
+                  <label key={val} className="flex items-center cursor-not-allowed space-x-2">
                     <input 
                       type="radio" 
                       name="overall_rating" 
                       value={val}
                       checked={overallRating === val}
-                      onChange={() => { setOverallRating(val); setErrors(e => { const ne={...e}; delete ne.overallRating; return ne; }) }}
-                      className="w-4 h-4 text-[#0b5c36] focus:ring-[#0b5c36] border-gray-300"
+                      readOnly
+                      onChange={() => {}}
+                      onClick={(e) => e.preventDefault()}
+                      className="w-4 h-4 text-[#0b5c36] focus:ring-[#0b5c36] border-gray-300 cursor-not-allowed"
                     />
                     <span className="text-sm text-gray-700 font-medium">{val}</span>
                   </label>
