@@ -38,6 +38,11 @@ export interface EnrolledProject {
   project_manager_emp_id?: string;
   project_manager_name?: string;
   can_approve_addition: boolean;   // computed server-side for the current user
+
+  // ── Feedback Request Status ──────────────────────────────────────────────
+  feedback_request_id?: number | null;
+  feedback_status?: string | null;      // 'pending', 'sent', 'completed'
+  pm_approval_status?: string | null;   // 'draft', 'pending_pm', 'approved', 'rejected'
 }
 
 export interface DeclineAdditionRequest {
