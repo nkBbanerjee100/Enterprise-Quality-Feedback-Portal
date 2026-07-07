@@ -78,9 +78,7 @@ def _enrollment_to_response(
     can_approve = False
     if current_user and enr.addition_approval_status == AdditionApprovalStatus.PENDING:
         role = current_user.get("role")
-        if role == "MANAGEMENT":
-            can_approve = True
-        elif role == "MANAGER" and pm_info and pm_info.get("emp_id") == current_user.get("emp_id"):
+        if role in ["MANAGEMENT", "QUALITY"]:
             can_approve = True
 
     return {
@@ -464,7 +462,7 @@ def set_project_eligibility(
     enrollment_id: int,
     payload: SetEligibilityRequest,
     db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
     """
     Set a project's eligibility status.
@@ -515,7 +513,7 @@ def request_manager_approval(
     payload: RequestManagerApprovalRequest,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER", "DELIVERY", "SALES" , "MANAGEMENT")),
+    current_user: dict = Depends(require_role("QUALITY", "DELIVERY", "SALES" , "MANAGEMENT")),
 ):
     """
     Escalate an exempted project to manager for approval.
@@ -554,7 +552,7 @@ def manager_decision(
     enrollment_id: int,
     payload: ManagerDecisionRequest,
     db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("MANAGER")),
+    current_user: dict = Depends(require_role("MANAGEMENT")),
 ):
     """
     Manager approves or declines a pending-approval project.
@@ -595,7 +593,7 @@ def remove_project_from_cycle(
     cycle_id: int,
     enrollment_id: int,
     db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
     """Remove a project enrollment from a cycle."""
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
@@ -612,17 +610,9 @@ def _assert_can_decide_addition(project: Project, current_user: dict, tms_db: Se
     role = current_user.get("role")
     if role in ["MANAGEMENT", "QUALITY"]:
         return
-    if role == "MANAGER":
-        pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
-        if pm_info and pm_info.get("emp_id") == current_user.get("emp_id"):
-            return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not the assigned Manager for this project.",
-        )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Only Management or the project's assigned Manager can decide on this addition.",
+        detail="Only Management or Quality can decide on this addition.",
     )
 
 
@@ -632,7 +622,7 @@ def approve_addition(
     enrollment_id: int,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
-    current_user: dict = Depends(require_role("MANAGER", "MANAGEMENT", "QUALITY")),
+    current_user: dict = Depends(require_role("MANAGEMENT", "QUALITY")),
 ):
     """Approve a project's addition to the cycle."""
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
@@ -660,7 +650,7 @@ def decline_addition(
     payload: DeclineAdditionRequest,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
-    current_user: dict = Depends(require_role("MANAGER", "MANAGEMENT", "QUALITY")),
+    current_user: dict = Depends(require_role("MANAGEMENT", "QUALITY")),
 ):
     """
     Decline a project's addition to the cycle.
