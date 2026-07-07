@@ -422,12 +422,12 @@ def create_feedback_request(
 
         if pm_email:
             portal_link = f"{settings.FRONTEND_URL}/feedback"
-            EmailSender.send_email(
-                to=pm_email,
-                subject=f"[Action Required] Review Feedback Form for #{payload.projectId}",
-                body=_build_pm_email_text(payload.projectId, project_name, portal_link),
-                html_content=_build_pm_email_html(payload.projectId, project_name, portal_link),
-            )
+            # EmailSender.send_email(
+            #     to=pm_email,
+            #     subject=f"[Action Required] Review Feedback Form for #{payload.projectId}",
+            #     body=_build_pm_email_text(payload.projectId, project_name, portal_link),
+            #     html_content=_build_pm_email_html(payload.projectId, project_name, portal_link),
+            # )
 
     return {
         "success":    True,
@@ -489,12 +489,12 @@ def update_feedback_request(
         tms_usr = tms_db.execute(text("SELECT Email FROM tsms_user WHERE EmpId = :empid LIMIT 1"), {"empid": tms_row.PmId}).fetchone()
         if tms_usr and tms_usr.Email:
             portal_link = f"{settings.FRONTEND_URL}/feedback"
-            EmailSender.send_email(
-                to=tms_usr.Email,
-                subject=f"[Action Required] Updated Feedback Form for #{payload.projectId}",
-                body=_build_pm_email_text(payload.projectId, tms_row.Name, portal_link),
-                html_content=_build_pm_email_html(payload.projectId, tms_row.Name, portal_link),
-            )
+            # EmailSender.send_email(
+            #     to=tms_usr.Email,
+            #     subject=f"[Action Required] Updated Feedback Form for #{payload.projectId}",
+            #     body=_build_pm_email_text(payload.projectId, tms_row.Name, portal_link),
+            #     html_content=_build_pm_email_html(payload.projectId, tms_row.Name, portal_link),
+            # )
 
     return {"success": True, "message": "Draft updated and resubmitted to PM."}
 
@@ -555,12 +555,13 @@ def pm_approve_request(
     tms_pid_val = int(req_row.tms_pid) if req_row else 0
     for qu in quality_users:
         if qu.email:
-            EmailSender.send_email(
-                to=qu.email,
-                subject=f"[Action Required] PM Approved Feedback Form for {project_name}",
-                body=_build_quality_approval_email_text(tms_pid_val, project_name, portal_link),
-                html_content=_build_quality_approval_email_html(tms_pid_val, project_name, portal_link),
-            )
+            # EmailSender.send_email(
+            #     to=qu.email,
+            #     subject=f"[Action Required] PM Approved Feedback Form for {project_name}",
+            #     body=_build_quality_approval_email_text(tms_pid_val, project_name, portal_link),
+            #     html_content=_build_quality_approval_email_html(tms_pid_val, project_name, portal_link),
+            # )
+            pass
 
     return {"success": True, "message": "Approved. Quality team notified."}
 
@@ -622,12 +623,13 @@ def pm_reject_request(
     tms_pid_val = int(req_row.tms_pid) if req_row else 0
     for qu in quality_users:
         if qu.email:
-            EmailSender.send_email(
-                to=qu.email,
-                subject=f"[Action Required] PM Rejected Feedback Form for {project_name}",
-                body=_build_quality_rejection_email_text(tms_pid_val, project_name, payload.pmRejectionComments, portal_link),
-                html_content=_build_quality_rejection_email_html(tms_pid_val, project_name, payload.pmRejectionComments, portal_link),
-            )
+            # EmailSender.send_email(
+            #     to=qu.email,
+            #     subject=f"[Action Required] PM Rejected Feedback Form for {project_name}",
+            #     body=_build_quality_rejection_email_text(tms_pid_val, project_name, payload.pmRejectionComments, portal_link),
+            #     html_content=_build_quality_rejection_email_html(tms_pid_val, project_name, payload.pmRejectionComments, portal_link),
+            # )
+            pass
 
     return {"success": True, "message": "Rejected. Quality team notified."}
 
