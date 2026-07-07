@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 
 from app.database import get_tms_db
 
@@ -101,33 +101,64 @@ def list_tms_projects(
     limit: int = Query(20, ge=1, le=500),
     search: Optional[str] = Query(None, description="Search by project name"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    pm: Optional[str] = Query(None, description="Filter by project manager emp_id"),
+    year: Optional[int] = Query(None, description="Filter by project start year"),
     tms_db: Session = Depends(get_tms_db),
 ):
     """
-    Returns projects from TMS (tsms_projects), paginated.
-    Bit fields (IsProjectActive etc.) are normalised to boolean.
+    Returns projects from TMS (tsms_projects), paginated. Bit fields
+    (IsProjectActive etc.) are normalised to boolean.
+
+    Also resolves and returns project_manager_name/project_manager_emp_id
+    (same PmId -> EmpId/FinanceId/UserId match used across the rest of the
+    TMS integration) — needed so callers like the "Add Projects" modal on
+    CsatCycleDetailPage can filter/display by manager, same as the
+    pre-cycle Select Projects page already does.
     """
     conditions = []
     params: dict = {"skip": skip, "limit": limit}
 
     if search:
-        conditions.append("Name LIKE :search")
+        conditions.append("p.Name LIKE :search")
         params["search"] = f"%{search}%"
 
     if is_active is not None:
-        conditions.append("IsProjectActive = :is_active")
+        conditions.append("p.IsProjectActive = :is_active")
         params["is_active"] = 1 if is_active else 0
+
+    if pm:
+        conditions.append("pm.EmpId = :pm")
+        params["pm"] = pm
+
+    if year:
+        # Range comparison, not YEAR(p.StartDate) = :year — a function call
+        # on the column would prevent any index on StartDate from being used.
+        conditions.append("p.StartDate >= :year_start AND p.StartDate < :year_end")
+        params["year_start"] = date(year, 1, 1)
+        params["year_end"] = date(year + 1, 1, 1)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    # PROJECT_COLUMNS' bare column names (no table prefix) still work
+    # unambiguously here since none of them collide with tsms_user's columns.
     list_sql = text(f"""
-        SELECT {PROJECT_COLUMNS}
-        FROM tsms_projects
+        SELECT {PROJECT_COLUMNS},
+               pm.EmpId AS project_manager_emp_id,
+               CONCAT_WS(' ', pm.EmpFirstName, pm.EmpLastName) AS project_manager_name
+        FROM tsms_projects p
+        LEFT JOIN tsms_user pm
+            ON p.PmId = pm.EmpId OR p.PmId = pm.FinanceId OR p.PmId = pm.UserId
         {where}
-        ORDER BY EndDate DESC
+        ORDER BY p.EndDate DESC
         LIMIT :limit OFFSET :skip
     """)
-    count_sql = text(f"SELECT COUNT(*) AS total FROM tsms_projects {where}")
+    count_sql = text(f"""
+        SELECT COUNT(*) AS total
+        FROM tsms_projects p
+        LEFT JOIN tsms_user pm
+            ON p.PmId = pm.EmpId OR p.PmId = pm.FinanceId OR p.PmId = pm.UserId
+        {where}
+    """)
 
     try:
         rows  = tms_db.execute(list_sql,  params).fetchall()
@@ -138,11 +169,17 @@ def list_tms_projects(
             detail=f"Could not query the TMS database: {exc}",
         )
 
+    def _row_with_pm(r):
+        d = _row_to_dict(r)
+        d["project_manager_name"] = (r.project_manager_name or "").strip() or None
+        d["project_manager_emp_id"] = r.project_manager_emp_id
+        return d
+
     return {
         "total":    total,
         "skip":     skip,
         "limit":    limit,
-        "projects": [_row_to_dict(r) for r in rows],
+        "projects": [_row_with_pm(r) for r in rows],
     }
 
 
