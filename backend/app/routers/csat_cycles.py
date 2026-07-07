@@ -681,16 +681,10 @@ def decline_addition(
     enr.addition_approved_at = datetime.utcnow()
     enr.addition_decision_remarks = payload.remarks
 
-    # Declining the ADDITION means this project doesn't belong in the cycle
-    # at all — it should never still read as "Ready" (eligible) afterward,
-    # regardless of whether a PM exists to have separately escalated an
-    # exemption. Previously this was only set when pm_info was None, which
-    # left eligibility_status at its default 'eligible' whenever a PM WAS
-    # assigned — the row kept showing "Ready" on the cycle detail page even
-    # though the addition itself had just been declined.
-    enr.eligibility_status = EligibilityStatus.EXEMPTED
-    if payload.remarks and not enr.exemption_reason:
-        enr.exemption_reason = payload.remarks
+    if pm_info is None:
+        enr.eligibility_status = EligibilityStatus.EXEMPTED
+        if payload.remarks and not enr.exemption_reason:
+            enr.exemption_reason = payload.remarks
 
     db.commit()
     db.refresh(enr)
