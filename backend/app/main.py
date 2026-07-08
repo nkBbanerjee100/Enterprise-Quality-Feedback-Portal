@@ -11,10 +11,10 @@ from app.routers import auth, users, csat_cycles, projects, feedback, dashboard,
 async def lifespan(app: FastAPI):
     """Application lifecycle manager"""
     # Startup
-    print("🚀 CSAT Tool API starting...")
+    print("CSAT Tool API starting...")
     yield
     # Shutdown
-    print("🛑 CSAT Tool API shutting down...")
+    print("CSAT Tool API shutting down...")
 
 
 def create_app() -> FastAPI:
@@ -71,4 +71,3 @@ def create_app() -> FastAPI:
 
 # Create application instance
 app = create_app()
-

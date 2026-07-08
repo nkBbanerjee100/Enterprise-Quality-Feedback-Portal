@@ -30,13 +30,14 @@ def _visible_filter(current_user: dict):
         everyone else in that role, or the other named recipient, still see
         it normally.
     """
+    emp_id_str = str(current_user["emp_id"]) if current_user.get("emp_id") else ""
     is_recipient = or_(
-        Notification.recipient_emp_id == current_user["emp_id"],
+        Notification.recipient_emp_id == emp_id_str,
         Notification.recipient_role == current_user["role"],
     )
     not_the_actor = or_(
         Notification.actor_emp_id.is_(None),
-        Notification.actor_emp_id != current_user["emp_id"],
+        Notification.actor_emp_id != emp_id_str,
     )
     return and_(is_recipient, not_the_actor)
 

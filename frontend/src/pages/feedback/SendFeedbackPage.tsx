@@ -12,11 +12,13 @@
 */
 import React, { useState, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { PageWrapper }    from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useCompletedProjects, useProject } from '../../hooks/useProjects';
 import { TMSProject }     from '../../types/project.types';
 import { feedbackApi }    from '../../api/feedback.api';
+import { csatCyclesApi }  from '../../api/csat-cycles.api';
 import { BRAND }          from '../../utils/constants';
  
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -30,6 +32,16 @@ function fmtDate(iso: string | null) {
  
 function isTestingPurpose(end_date: string | null) {
   return !!end_date && new Date(end_date).getFullYear() === 2099;
+}
+
+function formatDateToDDMMYYYY(dateStr: string) {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    const [year, month, day] = parts;
+    return `${day}-${month}-${year}`;
+  }
+  return dateStr;
 }
  
 // ── step indicator ─────────────────────────────────────────────────────────────
@@ -223,16 +235,19 @@ const ProjectPicker: React.FC<{
 // ── Step 2: Customer details form ──────────────────────────────────────────────
  
 interface CustomerForm {
-  recipientName:  string;
-  recipientEmail: string;
-  message:        string;
+  recipientName:       string;
+  recipientEmail:      string;
+  message:             string;
+  periodStart:         string;
+  periodEnd:           string;
 }
  
 const CustomerDetailsStep: React.FC<{
   form: CustomerForm;
   onChange: (f: CustomerForm) => void;
   project: TMSProject;
-}> = ({ form, onChange, project }) => {
+  cycleDatesFilled?: boolean;
+}> = ({ form, onChange, project, cycleDatesFilled }) => {
   const set = (key: keyof CustomerForm) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       onChange({ ...form, [key]: e.target.value });
@@ -247,7 +262,7 @@ const CustomerDetailsStep: React.FC<{
     fontSize: 11, fontWeight: 700, color: BRAND.textMid,
     letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6,
   };
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Selected project recap */}
@@ -268,8 +283,41 @@ const CustomerDetailsStep: React.FC<{
       </div>
  
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
-        Enter the customer contact who should receive the feedback form.
+        Enter the project details and customer contact for the feedback form.
       </p>
+
+      {/* Project details */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
+        <div>
+          <label style={labelStyle}>Period of Performance *</label>
+          {cycleDatesFilled && (
+            <div style={{ marginBottom: 8, padding: '7px 12px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span style={{ fontSize: 11, color: '#2563EB', fontWeight: 600 }}>Auto-filled from CSAT Cycle dates — you may adjust if needed</span>
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <span style={{ fontSize: 11, color: BRAND.textMid, display: 'block', marginBottom: 4 }}>From</span>
+              <input
+                type="date"
+                value={form.periodStart}
+                onChange={set('periodStart')}
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: BRAND.textMid, display: 'block', marginBottom: 4 }}>To</span>
+              <input
+                type="date"
+                value={form.periodEnd}
+                onChange={set('periodEnd')}
+                style={inputStyle}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
  
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div>
@@ -362,6 +410,7 @@ const ReviewStep: React.FC<{
         }}>Customer Recipient</p>
         <Row label="Name"  value={form.recipientName} />
         <Row label="Email" value={form.recipientEmail} />
+        <Row label="Period" value={`${formatDateToDDMMYYYY(form.periodStart)} to ${formatDateToDDMMYYYY(form.periodEnd)}`} />
         {form.message && <Row label="Message" value={form.message} />}
         <div style={{ paddingBottom: 8 }} />
       </div>
@@ -372,8 +421,8 @@ const ReviewStep: React.FC<{
         borderRadius: 8, padding: '12px 16px',
         fontSize: 12, color: '#1D4ED8', lineHeight: 1.6,
       }}>
-        ℹ️ A secure, tokenized feedback link will be generated and sent to <strong>{form.recipientEmail}</strong>.
-        The link will expire in <strong>30 days</strong>. You can send a reminder from the Feedback page if needed.
+        ℹ️ A draft feedback form will be generated and sent to the Project Manager for their review and approval. 
+        Once approved, it will be emailed to <strong>{form.recipientEmail}</strong>.
       </div>
     </div>
   );
@@ -398,10 +447,10 @@ const SuccessScreen: React.FC<{
         Feedback Form Sent!
       </h2>
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: '0 0 4px' }}>
-        A secure feedback link has been sent to
+        The draft feedback form has been sent to the Project Manager for approval.
       </p>
       <p style={{ fontSize: 14, fontWeight: 700, color: BRAND.green, margin: '0 0 4px' }}>
-        {recipientEmail}
+        Once approved, it will be sent to {recipientEmail}
       </p>
       <p style={{ fontSize: 12, color: BRAND.textLight, margin: '0 0 32px' }}>
         for project <strong>{project.project_name}</strong>
@@ -458,10 +507,13 @@ export const SendFeedbackPage: React.FC = () => {
   const [step, setStep]               = useState(0);
   const [selectedProject, setSelected] = useState<TMSProject | null>(null);
   const [customerForm, setCustomerForm] = useState<CustomerForm>({
-    recipientName:  '',
-    recipientEmail: '',
-    message:        '',
+    recipientName:       '',
+    recipientEmail:      '',
+    message:             '',
+    periodStart:         '',
+    periodEnd:           '',
   });
+  const [cycleDatesFilled, setCycleDatesFilled] = useState(false);
   const [sending, setSending]   = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [success, setSuccess]   = useState(false);
@@ -472,17 +524,51 @@ export const SendFeedbackPage: React.FC = () => {
   React.useEffect(() => {
     if (preProject && !selectedProject) {
       setSelected(preProject);
+      
+      let popStart = '';
+      let popEnd = '';
+      if (preProject.start_date && preProject.end_date) {
+        try {
+          popStart = new Date(preProject.start_date).toISOString().split('T')[0];
+          popEnd = new Date(preProject.end_date).toISOString().split('T')[0];
+        } catch (e) {
+          // fallback if invalid date
+        }
+      }
+      setCustomerForm(prev => ({ ...prev, periodStart: popStart, periodEnd: popEnd }));
+      
       setStep(1);
     }
-  }, [preProject]);
+  }, [preProject, selectedProject]);
+
+  // Auto-fill period of performance from CSAT cycle start/end dates
+  const { data: cycleData } = useQuery({
+    queryKey: ['csatCycle', cycleId],
+    queryFn: () => csatCyclesApi.getById(cycleId),
+    enabled: !!cycleId && cycleId > 0,
+  });
+  React.useEffect(() => {
+    if (cycleData && cycleId > 0) {
+      try {
+        const cycleStart = new Date(cycleData.start_date).toISOString().split('T')[0];
+        const cycleEnd   = new Date(cycleData.end_date).toISOString().split('T')[0];
+        setCustomerForm(prev => ({ ...prev, periodStart: cycleStart, periodEnd: cycleEnd }));
+        setCycleDatesFilled(true);
+      } catch (e) {
+        // ignore invalid dates
+      }
+    }
+  }, [cycleData, cycleId]);
  
   // Validation per step
   const canNext = () => {
     if (step === 0) return !!selectedProject;
     if (step === 1) {
-      const { recipientName, recipientEmail } = customerForm;
+      const { recipientName, recipientEmail, periodStart, periodEnd } = customerForm;
       return recipientName.trim().length > 0 &&
-             /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail.trim());
+             /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail.trim()) &&
+             periodStart.trim().length > 0 &&
+             periodEnd.trim().length > 0;
     }
     return true;
   };
@@ -493,10 +579,12 @@ export const SendFeedbackPage: React.FC = () => {
     setSendError(null);
     try {
       await feedbackApi.createRequest({
-        projectId:      selectedProject.project_id,
-        recipientEmail: customerForm.recipientEmail.trim(),
-        recipientName:  customerForm.recipientName.trim(),
-        csatCycleId:    cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
+        projectId:           selectedProject.project_id,
+        recipientEmail:      customerForm.recipientEmail.trim(),
+        recipientName:       customerForm.recipientName.trim(),
+        csatCycleId:         cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
+        periodOfPerformance: `${formatDateToDDMMYYYY(customerForm.periodStart)} to ${formatDateToDDMMYYYY(customerForm.periodEnd)}`,
+        message:             customerForm.message.trim(),
       });
       setSuccess(true);
     } catch (err: any) {
@@ -511,7 +599,7 @@ export const SendFeedbackPage: React.FC = () => {
   const reset = () => {
     setStep(0);
     setSelected(null);
-    setCustomerForm({ recipientName: '', recipientEmail: '', message: '' });
+    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', periodStart: '', periodEnd: '' });
     setSendError(null);
     setSuccess(false);
   };
@@ -559,7 +647,19 @@ export const SendFeedbackPage: React.FC = () => {
               {step === 0 && (
                 <ProjectPicker
                   selected={selectedProject}
-                  onSelect={p => setSelected(p)}
+                  onSelect={p => {
+                    setSelected(p);
+                    // Auto-fill period of performance
+                    let popStart = '';
+                    let popEnd = '';
+                    if (p.start_date && p.end_date) {
+                      try {
+                        popStart = new Date(p.start_date).toISOString().split('T')[0];
+                        popEnd = new Date(p.end_date).toISOString().split('T')[0];
+                      } catch (e) {}
+                    }
+                    setCustomerForm(prev => ({ ...prev, periodStart: popStart, periodEnd: popEnd }));
+                  }}
                 />
               )}
               {step === 1 && (
@@ -567,6 +667,7 @@ export const SendFeedbackPage: React.FC = () => {
                   form={customerForm}
                   onChange={setCustomerForm}
                   project={selectedProject!}
+                  cycleDatesFilled={cycleDatesFilled}
                 />
               )}
               {step === 2 && (
@@ -637,7 +738,7 @@ export const SendFeedbackPage: React.FC = () => {
                         }} />
                         Sending…
                       </>
-                    ) : '📧 Send Feedback Form'}
+                    ) : '📩 Send to PM for Approval'}
                   </button>
                 )}
               </div>

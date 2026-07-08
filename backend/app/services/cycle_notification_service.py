@@ -156,9 +156,20 @@ def notify_project_added_to_cycle(
         f'"{cycle_name}". Please review and approve or decline this addition.'
     )
 
-    # ── Management (always) ─────────────────────────────────────────────────
+    # ── Management & Quality ───────────────────────────────────────────────
     local_db.add(Notification(
         recipient_role="MANAGEMENT",
+        actor_emp_id=actor_emp_id,
+        type="PROJECT_ADDED_TO_CYCLE",
+        title=title,
+        message=base_message,
+        cycle_id=cycle_id,
+        project_id=project_id,
+        enrollment_id=enrollment_id,
+        link=link,
+    ))
+    local_db.add(Notification(
+        recipient_role="QUALITY",
         actor_emp_id=actor_emp_id,
         type="PROJECT_ADDED_TO_CYCLE",
         title=title,
@@ -181,36 +192,15 @@ def notify_project_added_to_cycle(
             except Exception as e:
                 print(f"[WARN] Failed to email management user {mgmt_user.get('emp_id')}: {e}")
 
-    # ── Project Manager (only if one exists on the TMS project) ────────────
+    # ── Project Manager Lookup (no longer notified for cycle addition) ─────
     pm_info = None
     try:
         pm_info = get_project_manager(int(project_ext_id), tms_db)
     except Exception as e:
         print(f"[WARN] Could not resolve PM for project {project_ext_id}: {e}")
 
-    if pm_info:
-        local_db.add(Notification(
-            recipient_emp_id=pm_info["emp_id"],
-            actor_emp_id=actor_emp_id,
-            type="PROJECT_ADDED_TO_CYCLE",
-            title=title,
-            message=base_message,
-            cycle_id=cycle_id,
-            project_id=project_id,
-            enrollment_id=enrollment_id,
-            link=link,
-        ))
-        if EMAIL_NOTIFICATIONS_ENABLED and pm_info.get("email"):
-            try:
-                EmailSender.send_email(
-                    to=pm_info["email"],
-                    subject=title,
-                    body=f"{base_message}\n\nReview it here: {link}",
-                    html_content=f"<p>{base_message}</p><p><a href='{link}'>Review the cycle</a></p>",
-                )
-            except Exception as e:
-                print(f"[WARN] Failed to email PM {pm_info.get('emp_id')}: {e}")
-
+    # (Emails are disabled for cycle addition per EMAIL_NOTIFICATIONS_ENABLED)
+    
     local_db.flush()
     return pm_info
 

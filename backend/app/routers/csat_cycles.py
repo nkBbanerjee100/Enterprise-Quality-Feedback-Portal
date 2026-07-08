@@ -12,6 +12,7 @@ from app.models.project import Project
 from app.models.cycle_project_enrollment import (
     CycleProjectEnrollment, EligibilityStatus, AdditionApprovalStatus,
 )
+from app.models.feedback_request import FeedbackRequest
 from app.schemas.csat_cycle import (
     CSATCycleCreate, CSATCycleUpdate, CSATCycleResponse,
     EnrolledProjectResponse, EnrollProjectsRequest,
@@ -72,13 +73,12 @@ def _enrollment_to_response(
     project: Project,
     pm_info: Optional[dict] = None,
     current_user: Optional[dict] = None,
+    fb_req: Optional[FeedbackRequest] = None,
 ) -> dict:
     can_approve = False
     if current_user and enr.addition_approval_status == AdditionApprovalStatus.PENDING:
         role = current_user.get("role")
-        if role == "MANAGEMENT":
-            can_approve = True
-        elif role == "MANAGER" and pm_info and pm_info.get("emp_id") == current_user.get("emp_id"):
+        if role in ["MANAGEMENT", "QUALITY"]:
             can_approve = True
 
     return {
@@ -101,6 +101,9 @@ def _enrollment_to_response(
         "project_manager_emp_id": pm_info.get("emp_id") if pm_info else None,
         "project_manager_name": pm_info.get("full_name") if pm_info else None,
         "can_approve_addition": can_approve,
+        "feedback_request_id": fb_req.id if fb_req else None,
+        "feedback_status": fb_req.status if fb_req else None,
+        "pm_approval_status": fb_req.pm_approval_status if fb_req else None,
     }
 
 
@@ -248,8 +251,9 @@ def list_cycle_projects(
     my_emp_id = current_user.get("emp_id")
 
     base_q = (
-        db.query(CycleProjectEnrollment, Project)
+        db.query(CycleProjectEnrollment, Project, FeedbackRequest)
         .join(Project, Project.id == CycleProjectEnrollment.project_id)
+        .outerjoin(FeedbackRequest, (FeedbackRequest.project_id == Project.id) & (FeedbackRequest.csat_cycle_id == cycle_id))
         .filter(CycleProjectEnrollment.cycle_id == cycle_id)
     )
 
@@ -278,7 +282,8 @@ def list_cycle_projects(
         base_q = base_q.order_by(Project.project_name)
 
     def _pm_map_for(rows):
-        tms_ids = [i for i in {_safe_int(proj.project_id) for _, proj in rows} if i is not None]
+        projs = [r[1] for r in rows]
+        tms_ids = [i for i in {_safe_int(p.project_id) for p in projs} if i is not None]
         return get_project_managers_bulk(tms_ids, tms_db)
 
     if is_manager_role:
@@ -288,14 +293,14 @@ def list_cycle_projects(
         all_matching = base_q.all()
         pm_map = _pm_map_for(all_matching)
         filtered = [
-            (enr, proj) for enr, proj in all_matching
+            (enr, proj, fb) for enr, proj, fb in all_matching
             if pm_map.get(_safe_int(proj.project_id), {}).get("emp_id") == my_emp_id
         ]
         total = len(filtered)
         page_rows = filtered[skip: skip + limit]
         data = [
-            _enrollment_to_response(enr, proj, pm_map.get(_safe_int(proj.project_id)), current_user)
-            for enr, proj in page_rows
+            _enrollment_to_response(enr, proj, pm_map.get(_safe_int(proj.project_id)), current_user, fb)
+            for enr, proj, fb in page_rows
         ]
         # Summary counts — always from ALL of this manager's projects in the
         # cycle, unaffected by the current project_status/eligibility filters.
@@ -315,8 +320,8 @@ def list_cycle_projects(
         page_rows = base_q.offset(skip).limit(limit).all()
         pm_map = _pm_map_for(page_rows)
         data = [
-            _enrollment_to_response(enr, proj, pm_map.get(_safe_int(proj.project_id)), current_user)
-            for enr, proj in page_rows
+            _enrollment_to_response(enr, proj, pm_map.get(_safe_int(proj.project_id)), current_user, fb)
+            for enr, proj, fb in page_rows
         ]
         # Summary counts by eligibility (always from full cycle, no project/eligibility filters)
         summary_rows = (
@@ -457,7 +462,7 @@ def set_project_eligibility(
     enrollment_id: int,
     payload: SetEligibilityRequest,
     db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
     """
     Set a project's eligibility status.
@@ -508,7 +513,7 @@ def request_manager_approval(
     payload: RequestManagerApprovalRequest,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER", "DELIVERY", "SALES" , "MANAGEMENT")),
+    current_user: dict = Depends(require_role("QUALITY", "DELIVERY", "SALES" , "MANAGEMENT")),
 ):
     """
     Escalate an exempted project to manager for approval.
@@ -547,7 +552,7 @@ def manager_decision(
     enrollment_id: int,
     payload: ManagerDecisionRequest,
     db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("MANAGER")),
+    current_user: dict = Depends(require_role("MANAGEMENT")),
 ):
     """
     Manager approves or declines a pending-approval project.
@@ -588,7 +593,7 @@ def remove_project_from_cycle(
     cycle_id: int,
     enrollment_id: int,
     db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
     """Remove a project enrollment from a cycle."""
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
@@ -603,19 +608,11 @@ def remove_project_from_cycle(
 
 def _assert_can_decide_addition(project: Project, current_user: dict, tms_db: Session) -> None:
     role = current_user.get("role")
-    if role == "MANAGEMENT":
+    if role in ["MANAGEMENT", "QUALITY"]:
         return
-    if role == "MANAGER":
-        pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
-        if pm_info and pm_info.get("emp_id") == current_user.get("emp_id"):
-            return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not the assigned Manager for this project.",
-        )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Only Management or the project's assigned Manager can decide on this addition.",
+        detail="Only Management or Quality can decide on this addition.",
     )
 
 
@@ -625,7 +622,7 @@ def approve_addition(
     enrollment_id: int,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
-    current_user: dict = Depends(require_role("MANAGER", "MANAGEMENT")),
+    current_user: dict = Depends(require_role("MANAGEMENT", "QUALITY")),
 ):
     """Approve a project's addition to the cycle."""
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
@@ -653,7 +650,7 @@ def decline_addition(
     payload: DeclineAdditionRequest,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
-    current_user: dict = Depends(require_role("MANAGER", "MANAGEMENT")),
+    current_user: dict = Depends(require_role("MANAGEMENT", "QUALITY")),
 ):
     """
     Decline a project's addition to the cycle.
