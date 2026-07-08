@@ -19,10 +19,12 @@ export const useCompletedProjects = (
   skip   = 0,
   limit  = 20,
   search?: string,
+  pm?:     string,
+  year?:   number,
 ) =>
   useQuery({
-    queryKey: ['tms-projects-completed', skip, limit, search],
-    queryFn:  () => projectsApi.listCompleted(skip, limit, search),
+    queryKey: ['tms-projects-completed', skip, limit, search, pm, year],
+    queryFn:  () => projectsApi.listCompleted(skip, limit, search, pm, year),
   });
 
 export const useProject = (projectId: number) =>

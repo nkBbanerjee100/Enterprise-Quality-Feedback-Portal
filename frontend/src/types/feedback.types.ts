@@ -6,13 +6,21 @@ export interface FeedbackRequest {
   id: number;
   csatCycleId: number;
   projectId: number;
+  projectExtId?: number;
+  projectName?: string;
   recipientEmail: string;
   recipientName: string;
+  ccEmails?: string;
   feedbackUrl?: string;
   requestSentAt?: string;
   reminderSentAt?: string;
   status: FeedbackStatus;
   createdAt: string;
+  expiresAt?: string;
+  periodOfPerformance?: string;
+  pmAchievements?: string;
+  pmApprovalStatus?: 'pending_pm' | 'approved' | 'rejected';
+  pmRejectionComments?: string;
 }
 
 export interface FeedbackResponse {
@@ -25,6 +33,7 @@ export interface FeedbackResponse {
 }
 
 export enum FeedbackStatus {
+  DRAFT = 'draft',
   PENDING = 'pending',
   SENT = 'sent',
   COMPLETED = 'completed',

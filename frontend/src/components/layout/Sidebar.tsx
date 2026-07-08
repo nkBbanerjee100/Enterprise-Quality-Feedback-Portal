@@ -66,13 +66,13 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Audit Logs',
     path:  ROUTES.ADMIN_AUDIT_LOGS,
     icon:  '☰',
-    roles: [UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT],
+    roles: [UserRole.QUALITY ],
   },
   {
     label: 'Allow User',
     path:  '/allow-user',
     icon:  '✓',
-    roles: [UserRole.QUALITY, UserRole.MANAGER , UserRole.MANAGEMENT],
+    roles: [UserRole.QUALITY, UserRole.MANAGEMENT],
   },
 ];
 

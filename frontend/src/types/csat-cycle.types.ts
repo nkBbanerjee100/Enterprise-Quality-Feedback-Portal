@@ -2,6 +2,12 @@
  * CSAT Cycle domain types
  */
 
+// 'pending_approval' / 'approved' / 'declined' are legacy values only — they
+// were produced by the old manager exemption-escalation flow, which has been
+// removed. No new enrollment can reach those states anymore (declining an
+// addition or exempting a project both go straight to 'exempted'), but they're
+// kept in the type so any pre-existing rows created before this change still
+// render correctly instead of falling through to an unhandled case.
 export type EligibilityStatus =
   | 'eligible'
   | 'exempted'
@@ -66,15 +72,6 @@ export interface SetEligibilityRequest {
   eligibility_status: EligibilityStatus;
   exemption_reason?: string;
   notes?: string;
-}
-
-export interface RequestManagerApprovalRequest {
-  exemption_reason?: string;
-}
-
-export interface ManagerDecisionRequest {
-  decision: 'approved' | 'declined';
-  manager_remarks?: string;
 }
 
 export const ELIGIBILITY_LABELS: Record<EligibilityStatus, string> = {

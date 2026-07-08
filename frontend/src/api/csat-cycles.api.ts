@@ -5,7 +5,6 @@ import { api } from './client';
 import { CSATCycle, PaginatedResponse } from '../types/common.types';
 import {
   EnrolledProject, EnrollProjectsRequest, SetEligibilityRequest,
-  RequestManagerApprovalRequest, ManagerDecisionRequest,
   CycleProjectsResponse, DeclineAdditionRequest,
 } from '../types/csat-cycle.types';
 
@@ -72,30 +71,6 @@ export const csatCyclesApi = {
   ): Promise<EnrolledProject> => {
     const r = await api.patch(
       `/api/csat-cycles/${cycleId}/projects/${enrollmentId}/eligibility`,
-      payload,
-    );
-    return r.data;
-  },
-
-  requestManagerApproval: async (
-    cycleId: number,
-    enrollmentId: number,
-    payload: RequestManagerApprovalRequest = {},
-  ): Promise<EnrolledProject> => {
-    const r = await api.post(
-      `/api/csat-cycles/${cycleId}/projects/${enrollmentId}/request-approval`,
-      payload,
-    );
-    return r.data;
-  },
-
-  managerDecision: async (
-    cycleId: number,
-    enrollmentId: number,
-    payload: ManagerDecisionRequest,
-  ): Promise<EnrolledProject> => {
-    const r = await api.post(
-      `/api/csat-cycles/${cycleId}/projects/${enrollmentId}/manager-decision`,
       payload,
     );
     return r.data;

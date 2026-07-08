@@ -19,6 +19,7 @@ import { useCompletedProjects, useProject } from '../../hooks/useProjects';
 import { TMSProject }     from '../../types/project.types';
 import { feedbackApi }    from '../../api/feedback.api';
 import { csatCyclesApi }  from '../../api/csat-cycles.api';
+import { projectStagingApi } from '../../api/project-staging.api';
 import { BRAND }          from '../../utils/constants';
  
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -94,46 +95,88 @@ const ProjectPicker: React.FC<{
 }> = ({ selected, onSelect }) => {
   const [search, setSearch]   = useState('');
   const [dSearch, setDSearch] = useState('');
+  const [pmFilter, setPmFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
   const [page, setPage]       = useState(1);
   const PAGE = 10;
   const timer = useRef<ReturnType<typeof setTimeout>>();
- 
+
   const { data, isLoading, error } = useCompletedProjects(
     (page - 1) * PAGE, PAGE, dSearch || undefined,
+    pmFilter || undefined, yearFilter ? Number(yearFilter) : undefined,
   );
- 
+
+  // Same manager list used elsewhere (e.g. CSAT Cycle's Add Projects modal) —
+  // distinct PMs across all TMS projects, independent of this page's own filters.
+  const { data: managers } = useQuery({
+    queryKey: ['staging-managers'],
+    queryFn: () => projectStagingApi.listManagers(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const yearOptions = Array.from({ length: 11 }, (_, i) => new Date().getFullYear() - i);
+
   const handleSearch = useCallback((val: string) => {
     setSearch(val);
     setPage(1);
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setDSearch(val), 350);
   }, []);
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
         Select the completed project you want to send a feedback form for.
       </p>
- 
-      {/* Search */}
-      <div style={{ position: 'relative', maxWidth: 400 }}>
-        <span style={{
-          position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
-          color: BRAND.textLight, fontSize: 14, pointerEvents: 'none',
-        }}>🔍</span>
-        <input
-          type="text"
-          value={search}
-          onChange={e => handleSearch(e.target.value)}
-          placeholder="Search by project name…"
+
+      {/* Search + filters */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: '1 1 260px', minWidth: 220 }}>
+          <span style={{
+            position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+            color: BRAND.textLight, fontSize: 14, pointerEvents: 'none',
+          }}>🔍</span>
+          <input
+            type="text"
+            value={search}
+            onChange={e => handleSearch(e.target.value)}
+            placeholder="Search by project name…"
+            style={{
+              width: '100%', padding: '9px 12px 9px 36px', boxSizing: 'border-box',
+              border: `1.5px solid ${BRAND.border}`, borderRadius: 8,
+              fontSize: 13, color: BRAND.textDark, outline: 'none',
+            }}
+          />
+        </div>
+        <select
+          value={pmFilter}
+          onChange={e => { setPmFilter(e.target.value); setPage(1); }}
           style={{
-            width: '100%', padding: '9px 12px 9px 36px', boxSizing: 'border-box',
-            border: `1.5px solid ${BRAND.border}`, borderRadius: 8,
-            fontSize: 13, color: BRAND.textDark, outline: 'none',
+            padding: '9px 10px', borderRadius: 8, border: `1.5px solid ${BRAND.border}`,
+            fontSize: 13, color: BRAND.textDark, background: '#fff', minWidth: 170,
           }}
-        />
+        >
+          <option value="">All project managers</option>
+          {(managers ?? []).map(pm => <option key={pm.emp_id} value={pm.emp_id}>{pm.name}</option>)}
+        </select>
+        <select
+          value={yearFilter}
+          onChange={e => { setYearFilter(e.target.value); setPage(1); }}
+          style={{
+            padding: '9px 10px', borderRadius: 8, border: `1.5px solid ${BRAND.border}`,
+            fontSize: 13, color: BRAND.textDark, background: '#fff',
+          }}
+        >
+          <option value="">All years</option>
+          {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        {(pmFilter || yearFilter) && (
+          <button
+            onClick={() => { setPmFilter(''); setYearFilter(''); setPage(1); }}
+            style={{ fontSize: 12, color: BRAND.textLight, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 2px' }}
+          >Clear filters</button>
+        )}
       </div>
- 
+
       {/* List */}
       <div style={{
         border: `1px solid ${BRAND.border}`, borderRadius: 10, overflow: 'hidden',
@@ -147,7 +190,7 @@ const ProjectPicker: React.FC<{
           </div>
         ) : !data?.projects.length ? (
           <div style={{ padding: 40, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>
-            {dSearch ? 'No projects match your search.' : 'No completed projects found in TMS.'}
+            {dSearch || pmFilter || yearFilter ? 'No projects match your filters.' : 'No completed projects found in TMS.'}
           </div>
         ) : (
           data.projects.map((p, idx) => {
@@ -186,7 +229,7 @@ const ProjectPicker: React.FC<{
                     )}
                   </div>
                   <div style={{ fontSize: 11, color: BRAND.textLight, marginTop: 3 }}>
-                    PM: {p.project_manager_id ?? '—'} · Ended: {fmtDate(p.end_date)}
+                    PM: {p.project_manager_name ?? p.project_manager_id ?? '—'} · Ended: {fmtDate(p.end_date)}
                   </div>
                 </div>
                 {isSel && (
@@ -199,7 +242,35 @@ const ProjectPicker: React.FC<{
           })
         )}
       </div>
- 
+
+      {/* Selected project's PM details — surfaced immediately on selection so
+          Quality can confirm who'll be asked to review before moving on. */}
+      {selected && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px',
+          background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10,
+        }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%', background: BRAND.green,
+            color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 14, fontWeight: 700, flexShrink: 0,
+          }}>
+            {(selected.project_manager_name ?? 'PM').trim().charAt(0).toUpperCase()}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: '#15803D', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Assigned Project Manager
+            </p>
+            <p style={{ margin: '2px 0 0', fontSize: 13, fontWeight: 600, color: BRAND.textDark }}>
+              {selected.project_manager_name ?? 'No PM assigned in TMS'}
+            </p>
+            {selected.project_manager_email && (
+              <p style={{ margin: '1px 0 0', fontSize: 12, color: BRAND.textMid }}>{selected.project_manager_email}</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Pagination */}
       {data && data.total > PAGE && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -266,23 +337,54 @@ const CustomerDetailsStep: React.FC<{
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Selected project recap */}
-      <div style={{
-        background: BRAND.greenMuted, border: `1px solid ${BRAND.border}`,
-        borderRadius: 8, padding: '12px 16px',
-        display: 'flex', gap: 12, alignItems: 'center',
-      }}>
-        <span style={{ fontSize: 20 }}>📁</span>
-        <div>
-          <div style={{ fontSize: 12, color: BRAND.textMid, fontWeight: 600 }}>
-            Sending feedback form for:
+      {/* Selected project recap + assigned PM — shown together here since this
+          is the step where Quality is entering the customer's contact info,
+          and needs to see at a glance who the form will be routed to for
+          review before it goes out. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{
+          background: BRAND.greenMuted, border: `1px solid ${BRAND.border}`,
+          borderRadius: 8, padding: '12px 16px',
+          display: 'flex', gap: 12, alignItems: 'center',
+        }}>
+          <span style={{ fontSize: 20 }}>📁</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: BRAND.textMid, fontWeight: 600 }}>
+              Sending feedback form for:
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: BRAND.textDark }}>
+              #{project.project_id} — {project.project_name}
+            </div>
           </div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: BRAND.textDark }}>
-            #{project.project_id} — {project.project_name}
+        </div>
+
+        <div style={{
+          background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8,
+          padding: '12px 16px', display: 'flex', gap: 12, alignItems: 'center',
+        }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: '50%', background: BRAND.green,
+            color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 13, fontWeight: 700, flexShrink: 0,
+          }}>
+            {(project.project_manager_name ?? 'PM').trim().charAt(0).toUpperCase()}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: '#15803D', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Will be reviewed by (PM)
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: BRAND.textDark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {project.project_manager_name ?? 'No PM assigned in TMS'}
+            </div>
+            {project.project_manager_email && (
+              <div style={{ fontSize: 11, color: BRAND.textMid, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {project.project_manager_email}
+              </div>
+            )}
           </div>
         </div>
       </div>
- 
+
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
         Enter the project details and customer contact for the feedback form.
       </p>
@@ -434,8 +536,9 @@ const ReviewStep: React.FC<{
         borderRadius: 8, padding: '12px 16px',
         fontSize: 12, color: '#1D4ED8', lineHeight: 1.6,
       }}>
-        ℹ️ A draft feedback form will be generated and sent to the Project Manager for their review and approval. 
-        Once approved, it will be emailed to <strong>{form.recipientEmail}</strong>.
+        ℹ️ This creates a draft only — the project's PM will be notified in-app (never by email) to
+        review it and add their team's achievements. Once the PM approves, you'll get a final
+        chance to confirm before it's emailed to <strong>{form.recipientEmail}</strong>.
       </div>
     </div>
   );
@@ -457,13 +560,13 @@ const SuccessScreen: React.FC<{
         justifyContent: 'center', margin: '0 auto 20px', fontSize: 28,
       }}>✓</div>
       <h2 style={{ fontSize: 22, fontWeight: 700, color: BRAND.textDark, margin: '0 0 8px' }}>
-        Feedback Form Sent!
+        Draft Created!
       </h2>
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: '0 0 4px' }}>
-        The draft feedback form has been sent to the Project Manager for approval.
+        The project's PM has been notified in-app to review it and add their achievements.
       </p>
       <p style={{ fontSize: 14, fontWeight: 700, color: BRAND.green, margin: '0 0 4px' }}>
-        Once approved, it will be sent to {recipientEmail}
+        Once approved, you'll confirm sending it to {recipientEmail}
       </p>
       <p style={{ fontSize: 12, color: BRAND.textLight, margin: '0 0 32px' }}>
         for project <strong>{project.project_name}</strong>
@@ -532,18 +635,16 @@ export const SendFeedbackPage: React.FC = () => {
   const [sendError, setSendError] = useState<string | null>(null);
   const [success, setSuccess]   = useState(false);
  
-  // Selecting a project (from the picker, or once a preselected project has
-  // loaded) defaults the recipient to that project's PM — per this flow's
-  // main use case: routing the feedback form straight to the person who ran
-  // the project. The customer contact case is still just a text field edit
-  // away, not a separate mode.
+  // Selecting a project only sets which project the feedback is for — it no
+  // longer pre-fills the Customer Recipient fields with the project's PM.
+  // Previously this defaulted recipientName/recipientEmail to the PM's own
+  // contact info, so unless Quality remembered to overwrite both fields with
+  // the actual customer's details, the feedback email was sent straight to
+  // the PM instead of the customer. The PM should only ever be notified
+  // in-app (handled server-side when the request is created) — never by
+  // email, and never as the actual "customer" recipient.
   const applyProjectSelection = (p: TMSProject) => {
     setSelected(p);
-    setCustomerForm(f => ({
-      ...f,
-      recipientName:  p.project_manager_name ?? f.recipientName,
-      recipientEmail: p.project_manager_email ?? f.recipientEmail,
-    }));
   };
  
   // If a project was preselected (via query param or nav state), skip step 1
@@ -769,7 +870,7 @@ export const SendFeedbackPage: React.FC = () => {
                         }} />
                         Sending…
                       </>
-                    ) : '📩 Send to PM for Approval'}
+                    ) : '📝 Create Draft for PM Review'}
                   </button>
                 )}
               </div>
@@ -782,4 +883,3 @@ export const SendFeedbackPage: React.FC = () => {
     </PageWrapper>
   );
 };
- 

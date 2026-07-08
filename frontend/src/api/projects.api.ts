@@ -29,9 +29,13 @@ export const projectsApi = {
     skip   = 0,
     limit  = 20,
     search?: string,
+    pm?:     string,
+    year?:   number,
   ): Promise<TMSProjectListResponse> => {
     const params: Record<string, unknown> = { skip, limit };
     if (search) params.search = search;
+    if (pm)     params.pm     = pm;
+    if (year !== undefined) params.year = year;
     const res = await api.get('/api/tms/projects/completed', { params });
     return res.data;
   },

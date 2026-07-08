@@ -30,9 +30,18 @@ type RowStatus = 'review' | 'ready' | 'not-eligible';
 
 function getRowStatus(p: EnrolledProject): RowStatus {
   if (p.addition_approval_status === 'pending') return 'review';
+  // A declined addition is final and overrides eligibility_status entirely —
+  // otherwise a project that was eligible/approved *before* Management
+  // declined its addition keeps showing as "Ready" forever, since
+  // eligibility_status isn't (and shouldn't be) touched by declineAddition.
+  if (p.addition_approval_status === 'declined') return 'not-eligible';
   if (p.eligibility_status === 'eligible' || p.eligibility_status === 'approved') return 'ready';
-  if (p.eligibility_status === 'pending_approval') return 'review';  // merged — "With manager" removed as its own bucket
-  return 'not-eligible'; // exempted, declined
+  // Everything else (exempted, and any legacy 'pending_approval'/'declined'
+  // rows left over from the old manager-escalation flow, which has been
+  // removed entirely — the Manager no longer has any role in exemption
+  // decisions) is final and not-eligible. There is no more "review" bucket
+  // for eligibility itself — only a project's *addition* can still need review.
+  return 'not-eligible';
 }
 
 const ROW_STATUS_META: Record<RowStatus, { label: string; bg: string; text: string; bar: string }> = {
@@ -433,102 +442,12 @@ function EnrollModal({
   );
 }
 
-// ─── Manager Decision Modal ────────────────────────────────────────────────────
-function ManagerDecisionModal({
-  project, cycleId, onClose, onDone,
-}: {
-  project: EnrolledProject; cycleId: number; onClose: () => void; onDone: () => void;
-}) {
-  const [decision, setDecision] = useState<'approved' | 'declined' | null>(null);
-  const [remarks, setRemarks] = useState('');
-
-  const mutation = useMutation({
-    mutationFn: () => csatCyclesApi.managerDecision(cycleId, project.enrollment_id, {
-      decision: decision!,
-      manager_remarks: remarks,
-    }),
-    onSuccess: onDone,
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-        <div className="px-6 py-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
-          <div>
-            <h3 className="font-bold text-blue-900">Manager Approval Decision</h3>
-            <p className="text-xs text-blue-700 mt-0.5">{project.project_name}</p>
-          </div>
-          <button onClick={onClose} className="text-blue-700 hover:text-blue-900 text-xl">×</button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
-          {project.exemption_reason && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-              <p className="text-xs font-semibold text-amber-700 mb-1">Exemption Reason</p>
-              <p className="text-sm text-amber-900">{project.exemption_reason}</p>
-            </div>
-          )}
-          <p className="text-sm text-gray-600">
-            <strong>Approve</strong> to make this project eligible for CSAT feedback.<br />
-            <strong>Decline</strong> to remove it from this cycle.
-          </p>
-
-          <div className="flex gap-3">
-            <button
-              onClick={() => setDecision('approved')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
-                decision === 'approved'
-                  ? 'border-green-500 bg-green-50 text-green-800'
-                  : 'border-gray-200 text-gray-600 hover:border-green-300'
-              }`}
-            >
-              ✓ Approve
-            </button>
-            <button
-              onClick={() => setDecision('declined')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
-                decision === 'declined'
-                  ? 'border-red-400 bg-red-50 text-red-800'
-                  : 'border-gray-200 text-gray-600 hover:border-red-300'
-              }`}
-            >
-              ✕ Decline
-            </button>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">Remarks (optional)</label>
-            <textarea
-              value={remarks}
-              onChange={e => setRemarks(e.target.value)}
-              rows={2}
-              placeholder="Add your remarks..."
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-none"
-            />
-          </div>
-        </div>
-        <div className="px-6 pb-5 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-            Cancel
-          </button>
-          <button
-            onClick={() => mutation.mutate()}
-            disabled={!decision || mutation.isPending}
-            className="px-5 py-2 text-sm font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
-            style={{
-              background: decision === 'approved' ? '#059669' : decision === 'declined' ? '#DC2626' : '#9CA3AF',
-              color: '#fff',
-            }}
-          >
-            {mutation.isPending ? 'Submitting...' : 'Submit Decision'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Addition Decision Modal (separate from the exemption ManagerDecisionModal
-// above — this decides whether a newly-added project stays in the cycle) ──────
+// ─── Addition Decision Modal (the only remaining decision modal on this page —
+// this decides whether a newly-added project stays in the cycle at all. The
+// old exemption-escalation ManagerDecisionModal has been removed entirely:
+// the Manager has no role in exemption/eligibility decisions anymore, and
+// declining an addition now always lands the project directly in
+// 'not-eligible' with no further review step.) ─────────────────────────────
 function AdditionDecisionModal({
   project, cycleId, onClose, onDone,
 }: {
@@ -645,17 +564,20 @@ export const CsatCycleDetailPage: React.FC = () => {
   // already permits MANAGEMENT for these actions — without it, Management
   // would never see the Actions column at all, including the new
   // "Approve Addition" button. Added to match actual backend permissions.
-  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.DELIVERY 
-    || user?.role === UserRole.SALES || user?.role === UserRole.MANAGEMENT;
+  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGER
+    || user?.role === UserRole.DELIVERY || user?.role === UserRole.SALES
+    || user?.role === UserRole.MANAGEMENT;
   const isManager = user?.role === UserRole.MANAGER;
-  // Only Quality and Management add projects to a cycle
+  // Only Quality and Management add projects to a cycle — Managers approve
+  // additions but don't initiate them.
   const canAddProjects = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT;
-  const canSendFeedback = canManage;
+  // Send Feedback is Quality/Management (+ Delivery/Sales, unchanged) — not
+  // Manager, who has a separate plan for this, not yet built.
+  const canSendFeedback = canManage && !isManager;
 
   const [statusFilter, setStatusFilter] = useState<'all' | RowStatus>(initialFilter);
   const [showHowThisWorks, setShowHowThisWorks] = useState(false);
   const [enrollModal, setEnrollModal] = useState(false);
-  const [approvalTarget, setApprovalTarget] = useState<EnrolledProject | null>(null);
   const [additionTarget, setAdditionTarget] = useState<EnrolledProject | null>(null);
 
   const { data: cycle, isLoading: cycleLoading } = useQuery({
@@ -700,22 +622,12 @@ export const CsatCycleDetailPage: React.FC = () => {
     [allProjects],
   );
 
-  // True once a manager has made ANY final decision (approve or decline) on this
-  // project and it hasn't been manually re-set by Quality/Delivery/Sales since.
-  // The backend clears approved_or_declined_at whenever eligibility is manually
-  // (re-)set via the eligibility endpoint, so its presence here means "this row's
-  // current status is exactly what the manager decided" — i.e. it's final:
-  //   - eligible + decided  → only "Send Feedback" (no Mark Exempted)
-  //   - exempted + decided  → no actions at all (manager declined it; final)
-  //   - not decided (fresh) → the normal action set applies
+  // approved_or_declined_at is a leftover field from the now-removed manager
+  // exemption-escalation flow. No new rows will ever set it going forward,
+  // but existing enrollments created before this change may still have it,
+  // so it's kept here purely to give those legacy rows the right subtitle
+  // copy ("Declined...") instead of the generic "Marked not eligible".
   const isManagerDecided = (p: EnrolledProject) => !!p.approved_or_declined_at;
-  // Covers BOTH ways a project can end up "Not eligible" as a final,
-  // no-further-action decision: the exemption-escalation flow's
-  // manager_decision (approved_or_declined_at set), and Management
-  // declining the addition itself outright (addition_approval_status ===
-  // 'declined'). Previously only the first case hid Make eligible/Send to
-  // manager — an addition-declined project still showed those, wrongly
-  // implying it wasn't actually final.
   const isFinallyDeclined = (p: EnrolledProject) =>
     isManagerDecided(p) || p.addition_approval_status === 'declined';
 
@@ -740,14 +652,12 @@ export const CsatCycleDetailPage: React.FC = () => {
   // second badge and the permanent workflow banner.
   const rowSubtitle = (p: EnrolledProject, status: RowStatus): string => {
     if (status === 'review') {
-      if (p.addition_approval_status === 'pending') {
-        return p.project_manager_name
-          ? `Added ${formatDate(p.enrolled_at)} · PM ${p.project_manager_name}`
-          : `Added ${formatDate(p.enrolled_at)} · no manager assigned`;
-      }
-      // Addition already resolved — this row is here because eligibility
-      // itself was escalated to a manager (the old "With manager" case).
-      return 'Sent for manager approval · awaiting decision';
+      // 'review' now only ever means the addition itself is still pending —
+      // there's no more eligibility-escalation path that lands here (the
+      // Manager exemption-decision flow was removed; see getRowStatus).
+      return p.project_manager_name
+        ? `Added ${formatDate(p.enrolled_at)} · PM ${p.project_manager_name}`
+        : `Added ${formatDate(p.enrolled_at)} · no manager assigned`;
     }
     if (status === 'ready') {
       return `Ready · added ${formatDate(p.enrolled_at)}`;
@@ -836,9 +746,9 @@ export const CsatCycleDetailPage: React.FC = () => {
           {showHowThisWorks && (
             <div className="bg-blue-50 border border-blue-100 rounded-xl px-5 py-3 mt-2 text-sm text-blue-800">
               Newly added projects need approval from Management or the project's manager before anything else
-              happens. Once approved, <em>Ready</em> projects can receive feedback requests; projects marked{' '}
-              <em>Not eligible</em> can be sent to a manager for override — if approved, they become eligible,
-              if declined, they stay not eligible.
+              happens. Once approved, <em>Ready</em> projects can receive feedback requests. Projects marked{' '}
+              <em>Not eligible</em> — whether exempted by Quality or declined by Management — are final; there's
+              no further review step and the project's Manager has no role in this decision.
             </div>
           )}
         </div>
@@ -902,35 +812,17 @@ export const CsatCycleDetailPage: React.FC = () => {
 
               // Secondary actions tucked behind the row's overflow menu —
               // only ever built for people who can actually act on them.
-              // Note: no "Mark exempted" entry here — a project only reaches
-              // this cycle after already being triaged (Eligible/Not sure/
-              // Exempt) in the pre-cycle Select Projects staging flow, so
-              // re-exempting it here would be a redundant second check.
-              // "Make eligible" / "Send to manager" below stay, since those
-              // handle rows that arrive already exempted (e.g. added to an
-              // existing cycle directly, bypassing staging).
-              // "Not eligible" is now always the result of a deliberate,
-              // final decision by whoever's authorized to make it — Quality
-              // at pre-cycle staging triage, Management declining an
-              // addition, or a Manager declining an exemption escalation.
-              // There's no remaining path here that should be reconsiderable
-              // or re-escalatable from this menu, so not-eligible rows get
-              // no menu items at all (RowMenu renders nothing for an empty
-              // list). This replaced trying to detect "was this a final
-              // decision" per-path (isManagerDecided, addition declined,
-              // staging-exempt, ...) — that kept missing cases; simpler and
-              // more correct to just not offer the actions at all anymore,
-              // since the one scenario they existed for (undoing a manual
-              // "Mark Exempted" click) no longer exists on this page.
+              // Currently empty by design: "Not eligible" is always the
+              // result of a deliberate, final decision by whoever's
+              // authorized to make it — Quality at pre-cycle staging
+              // triage, or Management declining an addition outright. The
+              // Manager has no role in exemption/eligibility decisions at
+              // all (that escalation flow has been removed entirely), and
+              // there's no remaining path here that should be
+              // reconsiderable from this menu — so not-eligible rows get no
+              // menu items at all (RowMenu renders nothing for an empty
+              // list).
               const menuItems: { label: string; onClick: () => void; disabled?: boolean }[] = [];
-              if (canManage && !isManagerDecided(project)) {
-                if (status === 'not-eligible') {
-                  menuItems.push(
-                    { label: 'Make eligible', onClick: () => markEligibleMutation.mutate(project.enrollment_id), disabled: markEligibleMutation.isPending },
-                    { label: 'Request approval', onClick: () => requestApprovalMutation.mutate(project.enrollment_id), disabled: requestApprovalMutation.isPending },
-                  );
-                }
-              }
 
               return (
                 <div key={project.enrollment_id} className="flex items-center gap-4 px-4 py-3.5">
@@ -959,7 +851,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                         </button>
                       )}
 
-                      {status === 'ready' && canSendFeedback && !project.feedback_request_id && (
+                      {status === 'ready' && canSendFeedback && (
                         <button
                           onClick={() => navigate('/feedback/send', {
                             state: { cycleId, projectId: Number(project.project_ext_id), enrollmentId: project.enrollment_id },
@@ -968,36 +860,6 @@ export const CsatCycleDetailPage: React.FC = () => {
                           style={{ background: BRAND.green }}
                         >
                           Send feedback →
-                        </button>
-                      )}
-
-                      {project.feedback_request_id && (
-                        <button
-                          onClick={() => navigate('/feedback')}
-                          className="px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap flex items-center gap-1"
-                          style={{ 
-                            background: (project.feedback_status === 'sent' || project.feedback_status === 'completed') ? '#E5E7EB' : BRAND.green,
-                            color: (project.feedback_status === 'sent' || project.feedback_status === 'completed') ? '#4B5563' : '#fff',
-                            border: (project.feedback_status === 'sent' || project.feedback_status === 'completed') ? '1px solid #D1D5DB' : 'none'
-                          }}
-                        >
-                          {project.feedback_status === 'sent' || project.feedback_status === 'completed' 
-                            ? 'Feedback Sent' 
-                            : project.pm_approval_status === 'pending_pm' 
-                              ? 'Pending PM Approval' 
-                              : project.pm_approval_status === 'approved'
-                                ? 'Approved (Go to Send)'
-                                : 'View Feedback'}
-                        </button>
-                      )}
-
-                      {project.eligibility_status === 'pending_approval' && user?.role === UserRole.MANAGEMENT && (
-                        <button
-                          onClick={() => setApprovalTarget(project)}
-                          className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white whitespace-nowrap"
-                          style={{ background: '#3B82F6' }}
-                        >
-                          Give decision
                         </button>
                       )}
 
@@ -1019,14 +881,6 @@ export const CsatCycleDetailPage: React.FC = () => {
           onClose={() => setEnrollModal(false)}
           onDone={() => { setEnrollModal(false); invalidate(); }}
           onTriaged={invalidate}
-        />
-      )}
-      {approvalTarget && (
-        <ManagerDecisionModal
-          project={approvalTarget}
-          cycleId={cycleId}
-          onClose={() => setApprovalTarget(null)}
-          onDone={() => { setApprovalTarget(null); invalidate(); }}
         />
       )}
       {additionTarget && (

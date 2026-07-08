@@ -82,7 +82,7 @@ function App() {
               path="/allow-user"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER , UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGEMENT]}>
                     <AllowUserPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
