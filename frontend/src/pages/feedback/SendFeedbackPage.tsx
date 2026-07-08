@@ -13,6 +13,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { PageWrapper }    from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useCompletedProjects, useProject } from '../../hooks/useProjects';
@@ -526,6 +527,7 @@ const ReviewStep: React.FC<{
         <Row label="Email" value={form.recipientEmail} />
         <Row label="Period" value={`${formatDateToDDMMYYYY(form.periodStart)} to ${formatDateToDDMMYYYY(form.periodEnd)}`} />
         {form.cc.trim() && <Row label="CC" value={form.cc} />}
+        <Row label="Period" value={`${formatDateToDDMMYYYY(form.periodStart)} to ${formatDateToDDMMYYYY(form.periodEnd)}`} />
         {form.message && <Row label="Message" value={form.message} />}
         <div style={{ paddingBottom: 8 }} />
       </div>
@@ -623,12 +625,14 @@ export const SendFeedbackPage: React.FC = () => {
   const [step, setStep]               = useState(0);
   const [selectedProject, setSelected] = useState<TMSProject | null>(null);
   const [customerForm, setCustomerForm] = useState<CustomerForm>({
-    recipientName:       '',
-    recipientEmail:      '',
+    recipientName:            '',
+    recipientEmail:           '',
     message:             '',
     periodStart:         '',
     periodEnd:           '',
-    cc:             '',
+    cc:                  '',
+    periodStart:         '',
+    periodEnd:           '',
   });
   const [cycleDatesFilled, setCycleDatesFilled] = useState(false);
   const [sending, setSending]   = useState(false);
@@ -653,6 +657,19 @@ export const SendFeedbackPage: React.FC = () => {
   React.useEffect(() => {
     if (preProject && !selectedProject) {
       applyProjectSelection(preProject);
+      
+      let popStart = '';
+      let popEnd = '';
+      if (preProject.start_date && preProject.end_date) {
+        try {
+          popStart = new Date(preProject.start_date).toISOString().split('T')[0];
+          popEnd = new Date(preProject.end_date).toISOString().split('T')[0];
+        } catch (e) {
+          // fallback if invalid date
+        }
+      }
+      setCustomerForm(prev => ({ ...prev, periodStart: popStart, periodEnd: popEnd }));
+      
       
       let popStart = '';
       let popEnd = '';
@@ -710,13 +727,15 @@ export const SendFeedbackPage: React.FC = () => {
     const ccList = customerForm.cc.split(',').map(e => e.trim()).filter(Boolean);
     try {
       await feedbackApi.createRequest({
-        projectId:           selectedProject.project_id,
-        recipientEmail:      customerForm.recipientEmail.trim(),
-        recipientName:       customerForm.recipientName.trim(),
-        csatCycleId:         cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
+        projectId:                selectedProject.project_id,
+        recipientEmail:           customerForm.recipientEmail.trim(),
+        recipientName:            customerForm.recipientName.trim(),
+        csatCycleId:              cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
         periodOfPerformance: `${formatDateToDDMMYYYY(customerForm.periodStart)} to ${formatDateToDDMMYYYY(customerForm.periodEnd)}`,
         message:             customerForm.message.trim(),
         cc:             ccList.length > 0 ? ccList : undefined,
+        periodOfPerformance: `${formatDateToDDMMYYYY(customerForm.periodStart)} to ${formatDateToDDMMYYYY(customerForm.periodEnd)}`,
+        message:             customerForm.message.trim(),
       });
       setSuccess(true);
     } catch (err: any) {
@@ -731,7 +750,7 @@ export const SendFeedbackPage: React.FC = () => {
   const reset = () => {
     setStep(0);
     setSelected(null);
-    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', periodStart: '', periodEnd: '', cc: '' });
+    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', periodStart: '', periodEnd: '', cc: '', periodStart: '', periodEnd: '' });
     setSendError(null);
     setSuccess(false);
   };

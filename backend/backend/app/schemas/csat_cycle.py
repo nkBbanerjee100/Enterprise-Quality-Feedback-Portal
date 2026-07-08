@@ -107,3 +107,14 @@ class SetEligibilityRequest(BaseModel):
     eligibility_status: EligibilityStatus
     exemption_reason: Optional[str] = None
     notes: Optional[str] = None
+
+
+class RequestManagerApprovalRequest(BaseModel):
+    """Request manager approval for an exempted project"""
+    exemption_reason: Optional[str] = None
+
+
+class ManagerDecisionRequest(BaseModel):
+    """Manager approves or declines a pending-approval project"""
+    decision: EligibilityStatus     # must be APPROVED or DECLINED
+    manager_remarks: Optional[str] = None
