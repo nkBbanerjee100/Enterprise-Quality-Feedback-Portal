@@ -236,10 +236,10 @@ export const ProjectDetailPage: React.FC = () => {
   return (
     <PageWrapper>
       <button
-        onClick={() => navigate('/projects')}
+        onClick={() => navigate(-1)}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'none', border: 'none', cursor: 'pointer', color: BRAND.textMid, fontSize: 13, fontWeight: 500, padding: 0 }}
       >
-        ← Back to Projects
+        ← Back
       </button>
 
       {isLoading && <div style={{ padding: 64 }}><LoadingSpinner text="Loading project…" /></div>}

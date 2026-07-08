@@ -36,6 +36,7 @@ import { ManagementDashboard }  from './pages/reports/ManagementDashboard';
 
 // Shared pages
 import { CsatCycleListPage }    from './pages/csat-cycles/CsatCycleListPage';
+import { PendingReviewsPage }   from './pages/reviews/PendingReviewsPage';
 import { CsatCycleDetailPage }  from './pages/csat-cycles/CsatCycleDetailPage';
 import { SelectProjectsPage }   from './pages/csat-cycles/SelectProjectsPage';
 import { ProjectListPage }      from './pages/projects/ProjectListPage';
@@ -43,8 +44,6 @@ import { ProjectDetailPage }    from './pages/projects/ProjectDetailPage';
 import { FeedbackRequestListPage } from './pages/feedback/FeedbackRequestListPage';
 import { SendFeedbackPage }     from './pages/feedback/SendFeedbackPage';
 import { CustomerSurveyPage }   from './pages/feedback/CustomerSurveyPage';
-import { ActionPlanListPage }   from './pages/action-plans/ActionPlanListPage';
-import { ActionPlanDetailPage } from './pages/action-plans/ActionPlanDetailPage';
 import { ReportsPage }          from './pages/reports/ReportsPage';
 import { UserManagementPage }   from './pages/admin/UserManagementPage';
 import { AuditLogsPage }        from './pages/admin/AuditLogsPage';
@@ -130,6 +129,18 @@ function App() {
               }
             />
 
+            {/* ── Needs Your Review — unified pending-decision inbox, Management only ── */}
+            <Route
+              path="/reviews"
+              element={
+                <ProtectedRoute>
+                  <RoleProtectedRoute allowedRoles={[UserRole.MANAGEMENT]}>
+                    <PendingReviewsPage />
+                  </RoleProtectedRoute>
+                </ProtectedRoute>
+              }
+            />
+
             {/* ── CSAT Cycles ────────────────────────────────────────────── */}
             <Route
               path="/csat-cycles"
@@ -202,27 +213,7 @@ function App() {
               }
             />
 
-            {/* ── Action Plans ───────────────────────────────────────────── */}
-            <Route
-              path="/action-plans"
-              element={
-                <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
-                    <ActionPlanListPage />
-                  </RoleProtectedRoute>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/action-plans/:id"
-              element={
-                <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
-                    <ActionPlanDetailPage />
-                  </RoleProtectedRoute>
-                </ProtectedRoute>
-              }
-            />
+            
 
             {/* ── Admin (Quality_Admin only — Phase 2) ───────────────────── */}
             <Route

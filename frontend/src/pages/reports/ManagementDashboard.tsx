@@ -113,9 +113,18 @@ export const ManagementDashboard: React.FC = () => {
 
   const cycleId = currentCycle?.id;
 
-  const { data: activeData, isLoading: activeLoading } = useQuery({
-    queryKey: ['dashboardActiveProjects', cycleId],
-    queryFn: () => csatCyclesApi.listProjects(cycleId!, { project_status: 'active', limit: 3, active_first: true }),
+  // "Eligible Projects" — projects in the current cycle whose eligibility_status
+  // is 'eligible' or 'approved' (the latter covers projects that went through a
+  // not-sure → manager-approval escalation and came back eligible). We use the
+  // eligibility filter (`status: 'eligible'`), NOT `project_status`, because
+  // `project_status` reflects a TMS-synced `is_active` flag that's only ever
+  // refreshed once, at enrollment time — it goes stale as soon as a project's
+  // real-world status changes afterward and there's no scheduled resync. The
+  // eligibility_status field, by contrast, is maintained directly in our own
+  // CSAT workflow, so it's always current.
+  const { data: eligibleData, isLoading: eligibleLoading } = useQuery({
+    queryKey: ['dashboardEligibleProjects', cycleId],
+    queryFn: () => csatCyclesApi.listProjects(cycleId!, { status: 'eligible', project_status: 'all', limit: 3, active_first: false }),
     enabled: !!cycleId,
   });
 
@@ -125,8 +134,8 @@ export const ManagementDashboard: React.FC = () => {
     enabled: !!cycleId,
   });
 
-  const activeProjects = activeData?.data ?? [];
-  const activeTotal = activeData?.total ?? 0;
+  const eligibleProjects = eligibleData?.data ?? [];
+  const eligibleTotal = eligibleData?.total ?? 0;
   const completedTotal = completedData?.total ?? 0;
 
   const completedProjects = useMemo(() => {
@@ -136,17 +145,21 @@ export const ManagementDashboard: React.FC = () => {
     return list.filter(p => p.project_name.toLowerCase().includes(q));
   }, [completedData, search]);
 
-  // Summary is cycle-wide regardless of which project_status filter was
-  // used to fetch it (backend computes it from the full cycle) — either
-  // call's summary works here.
-  const summary = activeData?.summary ?? completedData?.summary;
+  // Summary is cycle-wide regardless of which filter was used to fetch it
+  // (backend computes it from the full cycle) — either call's summary works here.
+  const summary = eligibleData?.summary ?? completedData?.summary;
+  const readyCount = eligibleData?.ready_count ?? completedData?.ready_count;
   const eligibilityRate = useMemo(() => {
-    if (!summary) return null;
+    if (!summary || readyCount == null) return null;
     const total = Object.values(summary).reduce((a, b) => a + (b ?? 0), 0);
     if (total === 0) return null;
-    const eligible = (summary.eligible ?? 0) + (summary.approved ?? 0);
-    return Math.round((eligible / total) * 100);
-  }, [summary]);
+    // Uses the backend's ready_count (eligible/approved AND addition itself
+    // confirmed) rather than summary.eligible + summary.approved directly —
+    // those raw eligibility_status counts include projects still awaiting
+    // addition approval, which inflated this rate to disagree with the
+    // cycle detail page's actual "Ready" count.
+    return Math.round((readyCount / total) * 100);
+  }, [summary, readyCount]);
 
   const avgScore = dashData?.metrics?.averageCsatScore;
 
@@ -183,9 +196,9 @@ export const ManagementDashboard: React.FC = () => {
         {/* KPI row */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
           <KpiCard
-            label="Active Projects" value={activeLoading ? '—' : activeTotal}
-            sub={activeTotal > 0 ? `${activeTotal} in this cycle` : undefined}
-            accent="#1A5C3A" icon="💼"
+            label="Eligible Projects" value={eligibleLoading ? '—' : eligibleTotal}
+            sub={eligibleTotal > 0 ? `${eligibleTotal} ready in this cycle` : undefined}
+            accent="#1A5C3A" icon="✅"
           />
           <KpiCard
             label="Completed Projects" value={completedLoading ? '—' : completedTotal}
@@ -194,7 +207,7 @@ export const ManagementDashboard: React.FC = () => {
           />
           <KpiCard
             label="Eligibility Rate" value={eligibilityRate != null ? `${eligibilityRate}%` : '—'}
-            sub="Across active projects"
+            sub="Across all projects in this cycle"
             accent="#7C3AED" icon="◎"
           />
           <KpiCard
@@ -204,21 +217,21 @@ export const ManagementDashboard: React.FC = () => {
           />
         </div>
 
-        {/* Active Projects */}
+        {/* Eligible Projects */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: BRAND.textDark, margin: 0 }}>Active Projects</h2>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: BRAND.textDark, margin: 0 }}>Eligible Projects</h2>
               <span style={{
                 background: '#E7F6EC', color: BRAND.green, fontSize: 12, fontWeight: 700,
                 padding: '2px 9px', borderRadius: 20,
               }}>
-                {activeTotal}
+                {eligibleTotal}
               </span>
             </div>
             {cycleId && (
               <button
-                onClick={() => navigate(`/csat-cycles/${cycleId}`)}
+                onClick={() => navigate(`/csat-cycles/${cycleId}?filter=ready&from=reports`)}
                 style={{ fontSize: 13, fontWeight: 600, color: BRAND.textMid, background: '#F3F4F6', border: 'none', borderRadius: 8, padding: '7px 14px', cursor: 'pointer' }}
               >
                 View all
@@ -238,11 +251,11 @@ export const ManagementDashboard: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {activeLoading ? (
+                {eligibleLoading ? (
                   <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>Loading…</td></tr>
-                ) : activeProjects.length === 0 ? (
-                  <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>No active projects in this cycle.</td></tr>
-                ) : activeProjects.map((p: EnrolledProject, i) => (
+                ) : eligibleProjects.length === 0 ? (
+                  <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>No eligible projects in this cycle yet.</td></tr>
+                ) : eligibleProjects.map((p: EnrolledProject, i) => (
                   <tr key={p.enrollment_id} style={{ borderLeft: i === 0 ? `3px solid ${BRAND.green}` : '3px solid transparent', borderBottom: '1px solid #F6F7F8' }}>
                     <td style={{ padding: '14px 20px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

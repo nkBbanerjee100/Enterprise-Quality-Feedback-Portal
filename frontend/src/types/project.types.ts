@@ -39,6 +39,7 @@ export interface TMSProject {
   // above is the raw, possibly-ambiguous PmId; these are the actual person.
   project_manager_name?:        string | null;
   project_manager_emp_id?:      string | null;
+  project_manager_email?:       string | null;
 }
 
 export interface TMSProjectListResponse {

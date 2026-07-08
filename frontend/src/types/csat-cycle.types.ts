@@ -50,6 +50,7 @@ export interface CycleProjectsResponse {
   skip: number;
   limit: number;
   summary: Record<EligibilityStatus, number>;
+  ready_count: number;   // eligible/approved AND addition itself confirmed — matches getRowStatus()'s "Ready" bucket
 }
 
 export interface EnrollProjectsRequest {

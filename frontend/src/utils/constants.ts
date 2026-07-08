@@ -59,6 +59,7 @@ export const ROUTES = {
   ACTION_PLAN_DETAIL: '/action-plans/:id',
   CSAT_CYCLES:        '/csat-cycles',
   CSAT_CYCLE_DETAIL:  '/csat-cycles/:id',
+  REVIEWS:            '/reviews',
 
   // Admin only
   ADMIN_USERS:        '/admin/users',

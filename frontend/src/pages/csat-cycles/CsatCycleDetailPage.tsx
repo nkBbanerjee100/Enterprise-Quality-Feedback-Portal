@@ -2,7 +2,7 @@
  * CSAT Cycle Detail Page
  */
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageWrapper } from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -623,7 +623,21 @@ function AdditionDecisionModal({
 export const CsatCycleDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
+
+  // This page is shared between the CSAT Cycles list ("/csat-cycles" →
+  // "/csat-cycles/:id") and the Reports "View all" shortcut, which links
+  // straight to the Ready-filtered view ("/csat-cycles/:id?filter=ready&from=reports").
+  // The back link and the initial status filter both depend on which of
+  // those two places sent the person here, so we read that off the URL
+  // instead of hardcoding a single entry point.
+  const cameFromReports = searchParams.get('from') === 'reports';
+  const initialFilterParam = searchParams.get('filter');
+  const validFilters = ['all', 'review', 'ready', 'not-eligible'] as const;
+  const initialFilter = (validFilters as readonly string[]).includes(initialFilterParam ?? '')
+    ? (initialFilterParam as 'all' | RowStatus)
+    : 'all';
   const { user } = useAuthStore();
   const cycleId = Number(id);
 
@@ -642,7 +656,7 @@ export const CsatCycleDetailPage: React.FC = () => {
   // Manager, who has a separate plan for this, not yet built.
   const canSendFeedback = canManage && !isManager;
 
-  const [statusFilter, setStatusFilter] = useState<'all' | RowStatus>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | RowStatus>(initialFilter);
   const [showHowThisWorks, setShowHowThisWorks] = useState(false);
   const [enrollModal, setEnrollModal] = useState(false);
   const [approvalTarget, setApprovalTarget] = useState<EnrolledProject | null>(null);
@@ -754,10 +768,10 @@ export const CsatCycleDetailPage: React.FC = () => {
 
         {/* Breadcrumb */}
         <button
-          onClick={() => navigate('/csat-cycles')}
+          onClick={() => navigate(cameFromReports ? '/reports' : '/csat-cycles')}
           className="text-sm text-gray-500 hover:text-gray-800 flex items-center gap-1"
         >
-          ← Back to CSAT Cycles
+          {cameFromReports ? '← Back to Reports' : '← Back to CSAT Cycles'}
         </button>
 
         {/* Cycle Header */}

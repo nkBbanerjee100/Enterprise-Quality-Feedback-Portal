@@ -226,6 +226,7 @@ interface CustomerForm {
   recipientName:  string;
   recipientEmail: string;
   message:        string;
+  cc:             string;   // comma-separated emails, optional
 }
  
 const CustomerDetailsStep: React.FC<{
@@ -268,7 +269,8 @@ const CustomerDetailsStep: React.FC<{
       </div>
  
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
-        Enter the customer contact who should receive the feedback form.
+        The feedback form is sent to the project's manager by default. You can adjust the
+        recipient below and optionally CC anyone else who should be copied on the email.
       </p>
  
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -292,6 +294,17 @@ const CustomerDetailsStep: React.FC<{
             style={inputStyle}
           />
         </div>
+      </div>
+ 
+      <div>
+        <label style={labelStyle}>CC (optional)</label>
+        <input
+          type="text"
+          value={form.cc}
+          onChange={set('cc')}
+          placeholder="comma-separated emails, e.g. jane@company.com, sam@company.com"
+          style={inputStyle}
+        />
       </div>
  
       <div>
@@ -362,6 +375,7 @@ const ReviewStep: React.FC<{
         }}>Customer Recipient</p>
         <Row label="Name"  value={form.recipientName} />
         <Row label="Email" value={form.recipientEmail} />
+        {form.cc.trim() && <Row label="CC" value={form.cc} />}
         {form.message && <Row label="Message" value={form.message} />}
         <div style={{ paddingBottom: 8 }} />
       </div>
@@ -461,28 +475,46 @@ export const SendFeedbackPage: React.FC = () => {
     recipientName:  '',
     recipientEmail: '',
     message:        '',
+    cc:             '',
   });
   const [sending, setSending]   = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [success, setSuccess]   = useState(false);
+ 
+  // Selecting a project (from the picker, or once a preselected project has
+  // loaded) defaults the recipient to that project's PM — per this flow's
+  // main use case: routing the feedback form straight to the person who ran
+  // the project. The customer contact case is still just a text field edit
+  // away, not a separate mode.
+  const applyProjectSelection = (p: TMSProject) => {
+    setSelected(p);
+    setCustomerForm(f => ({
+      ...f,
+      recipientName:  p.project_manager_name ?? f.recipientName,
+      recipientEmail: p.project_manager_email ?? f.recipientEmail,
+    }));
+  };
  
   // If a project was preselected (via query param or nav state), skip step 1
   // and jump straight to Customer Details once it's loaded.
   const { data: preProject } = useProject(Number(preselectedId));
   React.useEffect(() => {
     if (preProject && !selectedProject) {
-      setSelected(preProject);
+      applyProjectSelection(preProject);
       setStep(1);
     }
   }, [preProject]);
  
   // Validation per step
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const canNext = () => {
     if (step === 0) return !!selectedProject;
     if (step === 1) {
-      const { recipientName, recipientEmail } = customerForm;
-      return recipientName.trim().length > 0 &&
-             /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail.trim());
+      const { recipientName, recipientEmail, cc } = customerForm;
+      const validRecipient = recipientName.trim().length > 0 && EMAIL_RE.test(recipientEmail.trim());
+      const ccList = cc.split(',').map(e => e.trim()).filter(Boolean);
+      const validCc = ccList.every(e => EMAIL_RE.test(e));
+      return validRecipient && validCc;
     }
     return true;
   };
@@ -491,12 +523,15 @@ export const SendFeedbackPage: React.FC = () => {
     if (!selectedProject) return;
     setSending(true);
     setSendError(null);
+    const ccList = customerForm.cc.split(',').map(e => e.trim()).filter(Boolean);
     try {
       await feedbackApi.createRequest({
         projectId:      selectedProject.project_id,
         recipientEmail: customerForm.recipientEmail.trim(),
         recipientName:  customerForm.recipientName.trim(),
         csatCycleId:    cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
+        message:        customerForm.message.trim() || undefined,
+        cc:             ccList.length > 0 ? ccList : undefined,
       });
       setSuccess(true);
     } catch (err: any) {
@@ -511,7 +546,7 @@ export const SendFeedbackPage: React.FC = () => {
   const reset = () => {
     setStep(0);
     setSelected(null);
-    setCustomerForm({ recipientName: '', recipientEmail: '', message: '' });
+    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', cc: '' });
     setSendError(null);
     setSuccess(false);
   };
@@ -559,7 +594,7 @@ export const SendFeedbackPage: React.FC = () => {
               {step === 0 && (
                 <ProjectPicker
                   selected={selectedProject}
-                  onSelect={p => setSelected(p)}
+                  onSelect={p => applyProjectSelection(p)}
                 />
               )}
               {step === 1 && (
