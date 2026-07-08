@@ -13,7 +13,8 @@ backend/
 │   │
 │   ├── models/                 # SQLAlchemy ORM models
 │   │   ├── user.py             # User & Role models
-│   │   ├── csat_cycle.py       # CSAT Cycle master
+│   │   ├── csat_cycle.py       # CSAT Cycle master (Evaluations)
+│   │   ├── cycle_project_enrollment.py # Projects enrolled in CSAT Cycles
 │   │   ├── project.py          # Projects (from TMS sync)
 │   │   ├── feedback_request.py # Feedback requests
 │   │   ├── feedback_response.py# Feedback responses
@@ -34,9 +35,9 @@ backend/
 │   ├── routers/                # API route handlers
 │   │   ├── auth.py             # /api/auth/* endpoints
 │   │   ├── users.py            # /api/users/* endpoints
-│   │   ├── csat_cycles.py      # /api/csat-cycles/* endpoints
+│   │   ├── csat_cycles.py      # /api/csat-cycles/* (Cycles & Enrollment CRUD) endpoints
 │   │   ├── projects.py         # /api/projects/* endpoints
-│   │   ├── feedback.py         # /api/feedback/* endpoints
+│   │   ├── feedback.py         # /api/feedback/* (Includes public survey endpoints) endpoints
 │   │   ├── dashboard.py        # /api/dashboard/* endpoints
 │   │   ├── reports.py          # /api/reports/* endpoints
 │   │   └── tms_sync.py         # /api/tms/* endpoints

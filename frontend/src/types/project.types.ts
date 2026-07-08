@@ -35,6 +35,11 @@ export interface TMSProject {
   tsat_value:                   number | null;
   risk_status:                  'Red' | 'Yellow' | 'Green' | null;
   is_active:                    boolean;
+  // Resolved via TMS's PmId -> EmpId/FinanceId/UserId match — project_manager_id
+  // above is the raw, possibly-ambiguous PmId; these are the actual person.
+  project_manager_name?:        string | null;
+  project_manager_emp_id?:      string | null;
+  project_manager_email?:       string | null;
 }
 
 export interface TMSProjectListResponse {

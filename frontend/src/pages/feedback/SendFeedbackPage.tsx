@@ -13,6 +13,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { PageWrapper }    from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useCompletedProjects, useProject } from '../../hooks/useProjects';
@@ -240,6 +241,7 @@ interface CustomerForm {
   message:             string;
   periodStart:         string;
   periodEnd:           string;
+  cc:             string;   // comma-separated emails, optional
 }
  
 const CustomerDetailsStep: React.FC<{
@@ -343,6 +345,17 @@ const CustomerDetailsStep: React.FC<{
       </div>
  
       <div>
+        <label style={labelStyle}>CC (optional)</label>
+        <input
+          type="text"
+          value={form.cc}
+          onChange={set('cc')}
+          placeholder="comma-separated emails, e.g. jane@company.com, sam@company.com"
+          style={inputStyle}
+        />
+      </div>
+ 
+      <div>
         <label style={labelStyle}>Personal Message (optional)</label>
         <textarea
           value={form.message}
@@ -410,6 +423,8 @@ const ReviewStep: React.FC<{
         }}>Customer Recipient</p>
         <Row label="Name"  value={form.recipientName} />
         <Row label="Email" value={form.recipientEmail} />
+        <Row label="Period" value={`${formatDateToDDMMYYYY(form.periodStart)} to ${formatDateToDDMMYYYY(form.periodEnd)}`} />
+        {form.cc.trim() && <Row label="CC" value={form.cc} />}
         <Row label="Period" value={`${formatDateToDDMMYYYY(form.periodStart)} to ${formatDateToDDMMYYYY(form.periodEnd)}`} />
         {form.message && <Row label="Message" value={form.message} />}
         <div style={{ paddingBottom: 8 }} />
@@ -507,9 +522,12 @@ export const SendFeedbackPage: React.FC = () => {
   const [step, setStep]               = useState(0);
   const [selectedProject, setSelected] = useState<TMSProject | null>(null);
   const [customerForm, setCustomerForm] = useState<CustomerForm>({
-    recipientName:       '',
-    recipientEmail:      '',
+    recipientName:            '',
+    recipientEmail:           '',
     message:             '',
+    periodStart:         '',
+    periodEnd:           '',
+    cc:                  '',
     periodStart:         '',
     periodEnd:           '',
   });
@@ -518,12 +536,39 @@ export const SendFeedbackPage: React.FC = () => {
   const [sendError, setSendError] = useState<string | null>(null);
   const [success, setSuccess]   = useState(false);
  
+  // Selecting a project (from the picker, or once a preselected project has
+  // loaded) defaults the recipient to that project's PM — per this flow's
+  // main use case: routing the feedback form straight to the person who ran
+  // the project. The customer contact case is still just a text field edit
+  // away, not a separate mode.
+  const applyProjectSelection = (p: TMSProject) => {
+    setSelected(p);
+    setCustomerForm(f => ({
+      ...f,
+      recipientName:  p.project_manager_name ?? f.recipientName,
+      recipientEmail: p.project_manager_email ?? f.recipientEmail,
+    }));
+  };
+ 
   // If a project was preselected (via query param or nav state), skip step 1
   // and jump straight to Customer Details once it's loaded.
   const { data: preProject } = useProject(Number(preselectedId));
   React.useEffect(() => {
     if (preProject && !selectedProject) {
-      setSelected(preProject);
+      applyProjectSelection(preProject);
+      
+      let popStart = '';
+      let popEnd = '';
+      if (preProject.start_date && preProject.end_date) {
+        try {
+          popStart = new Date(preProject.start_date).toISOString().split('T')[0];
+          popEnd = new Date(preProject.end_date).toISOString().split('T')[0];
+        } catch (e) {
+          // fallback if invalid date
+        }
+      }
+      setCustomerForm(prev => ({ ...prev, periodStart: popStart, periodEnd: popEnd }));
+      
       
       let popStart = '';
       let popEnd = '';
@@ -561,6 +606,7 @@ export const SendFeedbackPage: React.FC = () => {
   }, [cycleData, cycleId]);
  
   // Validation per step
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const canNext = () => {
     if (step === 0) return !!selectedProject;
     if (step === 1) {
@@ -577,12 +623,16 @@ export const SendFeedbackPage: React.FC = () => {
     if (!selectedProject) return;
     setSending(true);
     setSendError(null);
+    const ccList = customerForm.cc.split(',').map(e => e.trim()).filter(Boolean);
     try {
       await feedbackApi.createRequest({
-        projectId:           selectedProject.project_id,
-        recipientEmail:      customerForm.recipientEmail.trim(),
-        recipientName:       customerForm.recipientName.trim(),
-        csatCycleId:         cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
+        projectId:                selectedProject.project_id,
+        recipientEmail:           customerForm.recipientEmail.trim(),
+        recipientName:            customerForm.recipientName.trim(),
+        csatCycleId:              cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
+        periodOfPerformance: `${formatDateToDDMMYYYY(customerForm.periodStart)} to ${formatDateToDDMMYYYY(customerForm.periodEnd)}`,
+        message:             customerForm.message.trim(),
+        cc:             ccList.length > 0 ? ccList : undefined,
         periodOfPerformance: `${formatDateToDDMMYYYY(customerForm.periodStart)} to ${formatDateToDDMMYYYY(customerForm.periodEnd)}`,
         message:             customerForm.message.trim(),
       });
@@ -599,7 +649,7 @@ export const SendFeedbackPage: React.FC = () => {
   const reset = () => {
     setStep(0);
     setSelected(null);
-    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', periodStart: '', periodEnd: '' });
+    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', periodStart: '', periodEnd: '', cc: '', periodStart: '', periodEnd: '' });
     setSendError(null);
     setSuccess(false);
   };
@@ -648,7 +698,7 @@ export const SendFeedbackPage: React.FC = () => {
                 <ProjectPicker
                   selected={selectedProject}
                   onSelect={p => {
-                    setSelected(p);
+                    applyProjectSelection(p);
                     // Auto-fill period of performance
                     let popStart = '';
                     let popEnd = '';

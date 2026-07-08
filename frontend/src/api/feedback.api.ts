@@ -12,6 +12,7 @@ export interface CreateFeedbackRequestPayload {
   recipientName:       string;
   csatCycleId?:        number;   // optional until cycles are wired
   message?:            string;   // personal note to include in the email
+  cc?:            string[]; // additional emails CC'd on the feedback request
   periodOfPerformance?: string;
   pmAchievements?:      string;
 }

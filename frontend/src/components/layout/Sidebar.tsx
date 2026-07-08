@@ -6,11 +6,13 @@
  */
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
 import { ROUTES } from '../../utils/constants';
 import logo from '../../assets/mindteckLogo.png';
 import { BRAND } from '../../utils/constants';
+import { reviewsApi } from '../../api/reviews.api';
 
 
 interface NavItem {
@@ -48,11 +50,10 @@ const NAV_ITEMS: NavItem[] = [
 
   },
   {
-    label: 'Action Plans',
-    path:  ROUTES.ACTION_PLANS,
-    icon:  '✓',
-    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
-
+    label: 'Needs Your Review',
+    path:  ROUTES.REVIEWS,
+    icon:  '⚑',
+    roles: [UserRole.MANAGEMENT],
   },
   {
     label: 'Reports',
@@ -92,6 +93,15 @@ export const Sidebar: React.FC = () => {
   const visibleItems = NAV_ITEMS.filter(
     (item) => user && item.roles.includes(user.role)
   );
+
+  // Only Management ever sees the Needs Your Review nav item, so only
+  // Management fetches this — avoids an extra request for every other role.
+  const { data: pendingCount } = useQuery({
+    queryKey: ['pendingReviewsCount'],
+    queryFn: () => reviewsApi.pendingCount(),
+    enabled: user?.role === UserRole.MANAGEMENT,
+    refetchInterval: 60_000,
+  });
 
   const isActive = (path: string) =>
     location.pathname === path ||
@@ -248,7 +258,22 @@ export const Sidebar: React.FC = () => {
               >
                 {item.icon}
               </span>
-              {item.label}
+              <span style={{ flex: 1 }}>{item.label}</span>
+              {item.path === ROUTES.REVIEWS && !!pendingCount && (
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: '#fff',
+                    background: '#DC2626',
+                    borderRadius: '10px',
+                    padding: '1px 7px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {pendingCount}
+                </span>
+              )}
             </Link>
           );
         })}

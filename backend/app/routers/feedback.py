@@ -166,6 +166,58 @@ def _build_pm_email_html(project_id: int, project_name: str, portal_link: str) -
   <p>Thank you,<br>Quality Team</p>
 </body>
 </html>"""
+<<<<<<< HEAD
+=======
+
+def _build_pm_email_text(project_id: int, project_name: str, portal_link: str) -> str:
+    return f"Feedback Form Approval Required\n\nPlease log in to the portal to review and approve the feedback form for Project #{project_id} - {project_name}.\nLink: {portal_link}"
+
+
+def _build_quality_approval_email_html(project_id: int, project_name: str, portal_link: str) -> str:
+    return f"""<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;color:#333;line-height:1.6;padding:20px;">
+  <h2 style="color:#0b5c36;">&#10003; PM Approved — Feedback Form Ready to Send</h2>
+  <p>Hello Quality Team,</p>
+  <p>The Project Manager has <strong>approved</strong> the Customer Satisfaction Feedback Form for project <strong>#{project_id} - {project_name}</strong> and has added the team's achievements.</p>
+  <p>Please log in to the portal, review the approved form (including PM achievements), and send it to the customer.</p>
+  <p><a href="{portal_link}" style="display:inline-block;padding:10px 20px;background:#16a34a;color:#fff;text-decoration:none;border-radius:5px;">Review &amp; Send to Customer</a></p>
+  <br>
+  <p>Thank you,<br>CSAT System</p>
+</body>
+</html>"""
+
+
+def _build_quality_approval_email_text(project_id: int, project_name: str, portal_link: str) -> str:
+    return f"PM Approved Feedback Form\n\nThe PM has approved the feedback form for Project #{project_id} - {project_name}.\nPlease review and send to customer: {portal_link}"
+
+
+def _build_quality_rejection_email_html(project_id: int, project_name: str, comments: str, portal_link: str) -> str:
+    return f"""<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;color:#333;line-height:1.6;padding:20px;">
+  <h2 style="color:#DC2626;">&#10007; PM Rejected — Action Required</h2>
+  <p>Hello Quality Team,</p>
+  <p>The Project Manager has <strong>rejected</strong> the Customer Satisfaction Feedback Form for project <strong>#{project_id} - {project_name}</strong>.</p>
+  <div style="background:#FEF2F2;border-left:4px solid #DC2626;padding:12px 16px;margin:16px 0;border-radius:4px;">
+    <p style="margin:0;font-weight:bold;color:#DC2626;">Reason for rejection:</p>
+    <p style="margin:8px 0 0;">{comments}</p>
+  </div>
+  <p>Please log in to the portal, update the form based on PM feedback, and resubmit for approval.</p>
+  <p><a href="{portal_link}" style="display:inline-block;padding:10px 20px;background:#DC2626;color:#fff;text-decoration:none;border-radius:5px;">View &amp; Edit Form</a></p>
+  <br>
+  <p>Thank you,<br>CSAT System</p>
+</body>
+</html>"""
+
+
+def _build_quality_rejection_email_text(project_id: int, project_name: str, comments: str, portal_link: str) -> str:
+    return f"PM Rejected Feedback Form\n\nThe PM rejected the feedback form for Project #{project_id} - {project_name}.\nReason: {comments}\n\nEdit and resubmit: {portal_link}"
+
+ 
+ 
+# ── Routes ─────────────────────────────────────────────────────────────────────
+>>>>>>> main
 
 def _build_pm_email_text(project_id: int, project_name: str, portal_link: str) -> str:
     return f"Feedback Form Approval Required\n\nPlease log in to the portal to review and approve the feedback form for Project #{project_id} - {project_name}.\nLink: {portal_link}"
@@ -434,6 +486,266 @@ def create_feedback_request(
         "pm_notified": bool(pm_email),
         "pm_email": pm_email,
         "message":    f"Draft created successfully. PM notified: {pm_email or 'No PM Email found'}",
+<<<<<<< HEAD
+    }
+
+@router.put("/requests/{request_id}")
+def update_feedback_request(
+    request_id: int,
+    payload: FeedbackRequestPayload,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Update a rejected draft and send back to PM."""
+    if current_user.get("role") == "MANAGER":
+        raise HTTPException(status_code=403, detail="Managers cannot edit drafts.")
+
+    req = db.execute(text("SELECT pm_approval_status, project_id FROM fact_feedback_request WHERE id = :id"), {"id": request_id}).fetchone()
+    if not req:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Update fields and set status back to pending_pm
+    db.execute(
+        text("""
+            UPDATE fact_feedback_request
+            SET recipient_email = :email, recipient_name = :name,
+                period_of_performance = :pop, pm_approval_status = 'pending_pm', pm_rejection_comments = NULL
+            WHERE id = :id
+        """),
+        {
+            "email": payload.recipientEmail,
+            "name": payload.recipientName,
+            "pop": payload.periodOfPerformance,
+            "id": request_id
+        }
+    )
+    db.commit()
+    
+    # Notify PM again
+    tms_row = tms_db.execute(
+        text("SELECT Name, PmId FROM tsms_projects WHERE Id = :pid LIMIT 1"),
+        {"pid": payload.projectId}
+    ).fetchone()
+    if tms_row and tms_row.PmId:
+        notification = Notification(
+            recipient_emp_id=str(tms_row.PmId),
+            actor_emp_id=str(current_user.get("emp_id")) if current_user.get("emp_id") else None,
+            type="FEEDBACK_DRAFT_UPDATED",
+            title="Feedback Form Resubmitted",
+            message=f"The Quality Team has updated the feedback form for {tms_row.Name} based on your comments. Please review and approve.",
+            link="/feedback",
+        )
+        db.add(notification)
+        db.commit()
+
+        tms_usr = tms_db.execute(text("SELECT Email FROM tsms_user WHERE EmpId = :empid LIMIT 1"), {"empid": tms_row.PmId}).fetchone()
+        if tms_usr and tms_usr.Email:
+            portal_link = f"{settings.FRONTEND_URL}/feedback"
+            # EmailSender.send_email(
+            #     to=tms_usr.Email,
+            #     subject=f"[Action Required] Updated Feedback Form for #{payload.projectId}",
+            #     body=_build_pm_email_text(payload.projectId, tms_row.Name, portal_link),
+            #     html_content=_build_pm_email_html(payload.projectId, tms_row.Name, portal_link),
+            # )
+
+    return {"success": True, "message": "Draft updated and resubmitted to PM."}
+
+@router.post("/requests/{request_id}/pm-approve")
+def pm_approve_request(
+    request_id: int,
+    payload: PMApprovalPayload,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user.get("role") != "MANAGER":
+        raise HTTPException(status_code=403, detail="Only Managers can approve.")
+
+    # Fetch request details for notifications
+    req_row = db.execute(
+        text("""
+            SELECT f.project_id, d.project_id AS tms_pid
+            FROM fact_feedback_request f
+            JOIN dim_projects d ON f.project_id = d.id
+            WHERE f.id = :id
+        """),
+        {"id": request_id}
+    ).fetchone()
+
+    db.execute(
+        text("UPDATE fact_feedback_request SET pm_approval_status = 'approved', pm_achievements = :ach WHERE id = :id"),
+        {"ach": payload.pmAchievements, "id": request_id}
+    )
+
+    # In-app notification → QUALITY role (actor = the PM who approved)
+    pm_emp_id = str(current_user.get("emp_id")) if current_user.get("emp_id") else None
+    project_name = f"Project #{req_row.tms_pid}" if req_row else "Unknown Project"
+    if req_row:
+        tms_row = tms_db.execute(
+            text("SELECT Name FROM tsms_projects WHERE Id = :pid LIMIT 1"),
+            {"pid": int(req_row.tms_pid)}
+        ).fetchone()
+        if tms_row:
+            project_name = tms_row.Name
+
+    notification = Notification(
+        recipient_role="QUALITY",
+        actor_emp_id=pm_emp_id,
+        type="PM_APPROVED_FEEDBACK",
+        title="PM Approved Feedback Form",
+        message=f"The Project Manager has approved the feedback form for {project_name}. Please review and send to the customer.",
+        link="/feedback",
+    )
+    db.add(notification)
+    db.commit()
+
+    # Email notification → Quality Team
+    portal_link = f"{settings.FRONTEND_URL}/feedback"
+    quality_users = db.execute(
+        text("SELECT email FROM users WHERE role = 'QUALITY' AND is_active = 1")
+    ).fetchall()
+    tms_pid_val = int(req_row.tms_pid) if req_row else 0
+    for qu in quality_users:
+        if qu.email:
+            # EmailSender.send_email(
+            #     to=qu.email,
+            #     subject=f"[Action Required] PM Approved Feedback Form for {project_name}",
+            #     body=_build_quality_approval_email_text(tms_pid_val, project_name, portal_link),
+            #     html_content=_build_quality_approval_email_html(tms_pid_val, project_name, portal_link),
+            # )
+            pass
+
+    return {"success": True, "message": "Approved. Quality team notified."}
+
+
+@router.post("/requests/{request_id}/pm-reject")
+def pm_reject_request(
+    request_id: int,
+    payload: PMRejectionPayload,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user.get("role") != "MANAGER":
+        raise HTTPException(status_code=403, detail="Only Managers can reject.")
+
+    # Fetch request details for notifications
+    req_row = db.execute(
+        text("""
+            SELECT f.project_id, d.project_id AS tms_pid
+            FROM fact_feedback_request f
+            JOIN dim_projects d ON f.project_id = d.id
+            WHERE f.id = :id
+        """),
+        {"id": request_id}
+    ).fetchone()
+
+    db.execute(
+        text("UPDATE fact_feedback_request SET pm_approval_status = 'rejected', pm_rejection_comments = :comments WHERE id = :id"),
+        {"comments": payload.pmRejectionComments, "id": request_id}
+    )
+
+    # In-app notification → QUALITY role (actor = the PM who rejected)
+    pm_emp_id = str(current_user.get("emp_id")) if current_user.get("emp_id") else None
+    project_name = f"Project #{req_row.tms_pid}" if req_row else "Unknown Project"
+    if req_row:
+        tms_row = tms_db.execute(
+            text("SELECT Name FROM tsms_projects WHERE Id = :pid LIMIT 1"),
+            {"pid": int(req_row.tms_pid)}
+        ).fetchone()
+        if tms_row:
+            project_name = tms_row.Name
+
+    notification = Notification(
+        recipient_role="QUALITY",
+        actor_emp_id=pm_emp_id,
+        type="PM_REJECTED_FEEDBACK",
+        title="PM Rejected Feedback Form",
+        message=f"The Project Manager has rejected the feedback form for {project_name}. Reason: {payload.pmRejectionComments}",
+        link="/feedback",
+    )
+    db.add(notification)
+    db.commit()
+
+    # Email notification → Quality Team
+    portal_link = f"{settings.FRONTEND_URL}/feedback"
+    quality_users = db.execute(
+        text("SELECT email FROM users WHERE role = 'QUALITY' AND is_active = 1")
+    ).fetchall()
+    tms_pid_val = int(req_row.tms_pid) if req_row else 0
+    for qu in quality_users:
+        if qu.email:
+            # EmailSender.send_email(
+            #     to=qu.email,
+            #     subject=f"[Action Required] PM Rejected Feedback Form for {project_name}",
+            #     body=_build_quality_rejection_email_text(tms_pid_val, project_name, payload.pmRejectionComments, portal_link),
+            #     html_content=_build_quality_rejection_email_html(tms_pid_val, project_name, payload.pmRejectionComments, portal_link),
+            # )
+            pass
+
+    return {"success": True, "message": "Rejected. Quality team notified."}
+
+@router.get("/requests/{request_id}")
+def get_feedback_request(
+    request_id: int,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get a single feedback request with cycle dates (for period-of-performance auto-fill)."""
+    row = db.execute(
+        text("""
+            SELECT
+                f.id, f.csat_cycle_id, f.project_id, f.recipient_email, f.recipient_name,
+                f.feedback_url, f.token, f.expires_at, f.request_sent_at, f.reminder_sent_at,
+                f.status, f.created_at, f.pm_approval_status, f.pm_rejection_comments,
+                f.period_of_performance, f.pm_achievements,
+                d.project_id AS tms_pid,
+                c.start_date AS cycle_start_date, c.end_date AS cycle_end_date
+            FROM fact_feedback_request f
+            JOIN dim_projects d ON f.project_id = d.id
+            LEFT JOIN csat_cycles c ON f.csat_cycle_id = c.id
+            WHERE f.id = :id
+        """),
+        {"id": request_id}
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    project_name = None
+    try:
+        tms_row = tms_db.execute(
+            text("SELECT Name FROM tsms_projects WHERE Id = :pid LIMIT 1"),
+            {"pid": int(row.tms_pid)}
+        ).fetchone()
+        if tms_row:
+            project_name = tms_row.Name
+    except Exception:
+        pass
+
+    return {
+        "id":                  row.id,
+        "csatCycleId":         row.csat_cycle_id,
+        "projectId":           row.tms_pid,
+        "projectName":         project_name,
+        "recipientEmail":      row.recipient_email,
+        "recipientName":       row.recipient_name,
+        "feedbackUrl":         row.feedback_url,
+        "requestSentAt":       row.request_sent_at.isoformat() if row.request_sent_at else None,
+        "reminderSentAt":      row.reminder_sent_at.isoformat() if row.reminder_sent_at else None,
+        "status":              row.status,
+        "createdAt":           row.created_at.isoformat() if row.created_at else None,
+        "expiresAt":           row.expires_at.isoformat() if row.expires_at else None,
+        "periodOfPerformance": row.period_of_performance,
+        "pmAchievements":      row.pm_achievements,
+        "pmApprovalStatus":    row.pm_approval_status,
+        "pmRejectionComments": row.pm_rejection_comments,
+        "cycleStartDate":      row.cycle_start_date.isoformat() if row.cycle_start_date else None,
+        "cycleEndDate":        row.cycle_end_date.isoformat() if row.cycle_end_date else None,
+=======
+>>>>>>> main
     }
 
 @router.put("/requests/{request_id}")
@@ -744,6 +1056,58 @@ def send_to_customer(
     db.commit()
 
     return {"success": True, "message": "Email sent to customer."}
+
+
+@router.post("/requests/{request_id}/send-to-customer")
+def send_to_customer(
+    request_id: int,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Quality Team sends the approved form to customer."""
+    if current_user.get("role") == "MANAGER":
+        raise HTTPException(status_code=403, detail="Managers cannot send to customer.")
+    
+    req = db.execute(text("""
+        SELECT f.project_id, f.recipient_email, f.recipient_name, f.pm_approval_status, d.project_id as tms_pid
+        FROM fact_feedback_request f
+        JOIN dim_projects d ON f.project_id = d.id
+        WHERE f.id = :id
+    """), {"id": request_id}).fetchone()
+
+    if not req:
+        raise HTTPException(status_code=404, detail="Not found")
+    if req.pm_approval_status != 'approved':
+        raise HTTPException(status_code=400, detail="Request must be approved by PM first.")
+
+    tms_pid = int(req.tms_pid)
+    token = _create_survey_token(tms_pid, req.recipient_email)
+    survey_link = f"{settings.FRONTEND_URL}/survey/{token}"
+    now = datetime.utcnow()
+    expires_at = now + timedelta(seconds=TOKEN_EXPIRY_SECONDS)
+
+    email_sent = EmailSender.send_email(
+        to=req.recipient_email,
+        subject=f"[Feedback Request] Project #{tms_pid} — Please Share Your Experience",
+        body=_build_email_text(req.recipient_name, tms_pid, survey_link, None),
+        html_content=_build_email_html(req.recipient_name, tms_pid, survey_link, None),
+    )
+
+    if not email_sent:
+        raise HTTPException(status_code=500, detail="Failed to send customer email.")
+
+    db.execute(
+        text("""
+            UPDATE fact_feedback_request
+            SET status = 'sent', token = :token, feedback_url = :url, expires_at = :expires, request_sent_at = :now
+            WHERE id = :id
+        """),
+        {"token": token, "url": survey_link, "expires": expires_at, "now": now, "id": request_id}
+    )
+    db.commit()
+
+    return {"success": True, "message": "Email sent to customer."}
  
  
 # ── Public survey endpoints (no auth, no DB) ───────────────────────────────────
@@ -824,7 +1188,11 @@ def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(g
  
         if req_row:
             request_id = req_row.id
+<<<<<<< HEAD
  
+=======
+
+>>>>>>> main
             # We dump the entire form structure as a JSON object into response_data
             # for maximum flexibility with the new survey requirements.
             db.execute(
@@ -839,7 +1207,11 @@ def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(g
                     "data":       json.dumps(body.data),
                 },
             )
+<<<<<<< HEAD
  
+=======
+
+>>>>>>> main
             # Mark request completed
             db.execute(
                 text("UPDATE fact_feedback_request SET status = 'completed' WHERE id = :id"),
