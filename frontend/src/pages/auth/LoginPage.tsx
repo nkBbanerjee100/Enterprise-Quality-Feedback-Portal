@@ -78,7 +78,13 @@ export const LoginPage: React.FC = () => {
           </span>
           </Link>
         </div>
-       
+
+        <Link
+          to="/register-self"
+          className="rounded-[8px] border-[1.5px] border-[#1A5C3A] px-4 py-2 text-sm font-semibold text-[#1A5C3A] transition hover:bg-[#1A5C3A] hover:text-white"
+        >
+          Sign up
+        </Link>
       </header>
 
       {/* Main content */}

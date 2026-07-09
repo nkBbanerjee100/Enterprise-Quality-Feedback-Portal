@@ -7,11 +7,10 @@
  *   - QUALITY:     + "Allow User" tab  + "Audit Logs" tab
  *   - MANAGEMENT:  + "Allow User" tab
  *
- * The Allow User / Audit Logs content itself is unchanged — this page just
- * embeds the same components that used to live at /allow-user and
- * /admin/audit-logs, reached via the sidebar. Those routes still exist for
- * direct links, but the sidebar no longer lists them separately; Settings
- * is now the one place to find them.
+ * The Allow User / Audit Logs content is unchanged — this page embeds
+ * the same components that previously lived at /allow-user and
+ * /admin/audit-logs. Those routes still exist for direct links, but the
+ * sidebar no longer lists them separately.
  */
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -19,13 +18,14 @@ import { PageWrapper } from '../../components/layout/PageWrapper';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
 import { projectsApi } from '../../api/projects.api';
-import { AllowUserContent } from '../auth/AllowUserPage';
+import { TMSProject } from '../../types/project.types';
+import { AllowUserContent } from './SettingsAllowUser';
 import { AuditLogsContent } from '../admin/AuditLogsPage';
 import { BRAND } from '../../utils/constants';
 
 type TabKey = 'details' | 'allow-user' | 'audit-logs';
 
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
@@ -79,6 +79,13 @@ const MyProjectsCard: React.FC = () => {
     enabled: !!user?.emp_id,
   });
 
+  // TMS's own IsProjectActive flag isn't reliable, so it's not used at all
+  // here — completion is judged purely by comparing EndDate to today.
+  const isCompleted = (p: TMSProject) => {
+    if (!p.end_date) return false;
+    return new Date(p.end_date) < new Date();
+  };
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6" style={{ maxWidth: 720 }}>
       <h2 className="text-base font-semibold text-gray-800 mb-1">My Projects</h2>
@@ -101,23 +108,26 @@ const MyProjectsCard: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {data.projects.map(p => (
-              <tr key={p.project_id} className="border-b border-gray-50">
-                <td className="py-2 pr-4 text-gray-700 font-medium">{p.project_name}</td>
-                <td className="py-2 pr-4 text-gray-500">{formatDate(p.start_date)}</td>
-                <td className="py-2 pr-4 text-gray-500">{formatDate(p.end_date)}</td>
-                <td className="py-2 pr-4">
-                  <span
-                    className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
-                    style={p.is_active
-                      ? { background: '#E8F2EC', color: '#1A5C3A' }
-                      : { background: '#F3F4F6', color: '#6B7280' }}
-                  >
-                    {p.is_active ? 'Active' : 'Completed'}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {data.projects.map(p => {
+              const completed = isCompleted(p);
+              return (
+                <tr key={p.project_id} className="border-b border-gray-50">
+                  <td className="py-2 pr-4 text-gray-700 font-medium">{p.project_name}</td>
+                  <td className="py-2 pr-4 text-gray-500">{formatDate(p.start_date)}</td>
+                  <td className="py-2 pr-4 text-gray-500">{formatDate(p.end_date)}</td>
+                  <td className="py-2 pr-4">
+                    <span
+                      className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+                      style={!completed
+                        ? { background: '#E8F2EC', color: '#1A5C3A' }
+                        : { background: '#F3F4F6', color: '#6B7280' }}
+                    >
+                      {!completed ? 'Active' : 'Completed'}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -147,9 +157,7 @@ export const SettingsPage: React.FC = () => {
           <p className="text-sm text-gray-500 mt-1">Your account details{showAllowUser || showAuditLogs ? ', plus admin tools' : ''}.</p>
         </div>
 
-        {/* Only show tab bar when there's more than one tab — Manager /
-            everyone-else just sees My Details (+ My Projects for Manager)
-            directly, no need for a single-tab bar. */}
+        {/* Tab bar — only when there's more than one tab */}
         {tabs.length > 1 && (
           <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #E5E7EB' }}>
             {tabs.map(t => (

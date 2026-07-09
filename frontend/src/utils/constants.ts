@@ -47,6 +47,7 @@ export const ROUTES = {
 
   // Management User default landing
   REPORTS:            '/reports',
+  SETTINGS:           '/settings',
 
   // Shared
   PROJECTS:           '/projects',

@@ -272,7 +272,7 @@ const StatsStrip: React.FC = () => {
   const stats = [
     { value: '100%',       label: 'TMS-integrated projects' },
     { value: 'Real-time',  label: 'CSAT dashboard & KPIs'   },
-    { value: '4 roles',    label: 'Role-based access control' },
+    { value: '5 roles',    label: 'Role-based access control' },
     { value: 'Full audit', label: 'Status trail & logs'      },
   ];
   return (
@@ -347,7 +347,7 @@ const FeaturesSection: React.FC = () => {
         </svg>
       ),
       title: 'Role-based access control',
-      desc: 'Quality , Delivery & Sales ~ Each having their own responsibilites to work on ',
+      desc: 'Quality configures and triages, Management approves, Managers see their own projects, Delivery & Sales get read-only visibility.',
     },
     {
       icon: (
@@ -578,7 +578,7 @@ const StatusSection: React.FC = () => {
 const RolesSection: React.FC = () => {
   const roles = [
     {
-      name: 'Quality ',
+      name: 'Quality',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={G} strokeWidth="2" strokeLinecap="round">
           <circle cx="12" cy="12" r="3" />
@@ -586,44 +586,44 @@ const RolesSection: React.FC = () => {
         </svg>
       ),
       iconBg: 'rgba(26,92,58,0.08)',
-      desc: 'Configure templates, manage questions, view all feedback, send and resend forms, export reports, and manage audit logs.',
-      can: ['Configure feedback templates', 'Send & resend forms', 'Export reports', 'View audit logs', 'Manage portal settings'],
+      desc: 'Triages which completed projects go into each CSAT cycle, sends feedback requests, and manages who\u2019s allowed to register.',
+      can: ['Create & run CSAT cycles', 'Triage & stage projects', 'Send feedback requests', 'Allow-list new users', 'View audit logs'],
+    },
+    {
+      name: 'Management',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={GOLD} strokeWidth="2" strokeLinecap="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      ),
+      iconBg: 'rgba(155,124,42,0.10)',
+      desc: 'Approves or declines projects flagged for review, decides on project additions to a cycle, and gets the full Reports dashboard.',
+      can: ['Approve/decline project additions', 'Review flagged projects', 'Allow-list new users', 'Full Reports dashboard'],
     },
     {
       name: 'Manager',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={GOLD} strokeWidth="2" strokeLinecap="round">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
           <circle cx="12" cy="7" r="4" />
         </svg>
       ),
-      iconBg: 'rgba(155,124,42,0.10)',
-      desc: 'View assigned completed projects, send feedback forms, track pending and submitted responses, and export allowed data.',
-      can: ['View completed projects', 'Send feedback forms', 'Track pending responses', 'Export allowed data'],
+      iconBg: 'rgba(37,99,235,0.08)',
+      desc: 'A Project Manager sees only the projects TMS has assigned to them, and decides whether each one belongs in a cycle.',
+      can: ['View only your own projects', 'Approve/decline your project additions', 'Notified when your projects change'],
     },
     {
-      name: 'Sales',
+      name: 'Delivery & Sales',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#B9503C" strokeWidth="2" strokeLinecap="round">
           <line x1="18" y1="20" x2="18" y2="10" />
           <line x1="12" y1="20" x2="12" y2="4" />
           <line x1="6" y1="20" x2="6" y2="14" />
         </svg>
       ),
-      iconBg: 'rgba(37,99,235,0.08)',
-      desc: 'Read-only access to dashboards, CSAT trends, satisfaction summaries, and permitted report exports — no operational controls.',
-      can: ['View CSAT dashboards', 'View quality trends', 'Customer satisfaction summaries', 'Export reports (permitted)'],
-    },
-    {
-      name: 'Delivery',
-      icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#B9503C" strokeWidth="2" strokeLinecap="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-      ),
       iconBg: 'rgba(185,80,60,0.08)',
-      desc: 'Opens a secure, expiring feedback link. Submits ratings and comments once. Receives a confirmation — no login required.',
-      can: ['Open secure feedback link', 'Submit ratings & comments', 'Receive confirmation email'],
+      desc: 'Read-only visibility across projects, feedback, and CSAT cycles \u2014 for teams who need the full picture without operational controls.',
+      can: ['View projects & feedback', 'View CSAT cycles', 'View reports (read-only)'],
     },
   ];
 
@@ -680,6 +680,23 @@ const RolesSection: React.FC = () => {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Customers never get a portal login — this note keeps that
+          distinction visible instead of implying a 5th account type. */}
+      <div style={{
+        marginTop: 16, display: 'flex', alignItems: 'center', gap: 10,
+        padding: '14px 18px', background: '#fff', borderRadius: 12,
+        border: `0.5px dashed ${BORDER}`,
+      }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={LIGHTER} strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0 }}>
+          <line x1="22" y1="2" x2="11" y2="13" />
+          <polygon points="22 2 15 22 11 13 2 9 22 2" />
+        </svg>
+        <p style={{ fontSize: 12.5, color: MUTED, margin: 0 }}>
+          <strong style={{ color: TEXT }}>Customers never need an account.</strong>{' '}
+          They receive a secure, expiring link by email, fill in their feedback once, and that's it — no sign-up, no password.
+        </p>
       </div>
     </section>
   );
@@ -752,12 +769,7 @@ const Footer: React.FC = () => (
     <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', margin: 0 }}>
       © {new Date().getFullYear()} CSAT Tool · Quality Department · Mindteck
     </p>
-    <div style={{ display: 'flex', gap: 20 }}>
-      <Link to={ROUTES.LOGIN} style={{ fontSize: 12, color: 'rgba(255,255,255,0.38)', textDecoration: 'none' }}>
-        Sign in
-      </Link>
-
-    </div>
+    
   </footer>
 );
 
