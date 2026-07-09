@@ -21,12 +21,24 @@ export type AuditAction =
   | 'LOGOUT'
   | 'REGISTRATION_APPROVED'
   | 'REGISTRATION_REJECTED'
-  | 'ROLE_CHANGED'
+  | 'CSAT_CYCLE_CREATED'
+  | 'PROJECT_ENROLLED'
   | 'CYCLE_ELIGIBILITY_CHANGED'
   | 'CYCLE_ADDITION_APPROVED'
   | 'CYCLE_ADDITION_DECLINED'
-  | 'PROJECT_SOFT_DELETED'
+  | 'PROJECT_STAGING_TRIAGED'
   | 'FEEDBACK_SENT';
+  // NOTE: ROLE_CHANGED and PROJECT_SOFT_DELETED removed — no endpoint
+  // anywhere in the backend can fire them (no "change role" or "delete
+  // project" feature exists yet), so they only ever showed up as
+  // permanently-empty filter options. Add them back only alongside
+  // actually building those features.
+  //
+  // STAGING_REVIEW_APPROVED/DECLINED also removed — Management's decision
+  // on a "not sure" staged project now logs under CYCLE_ADDITION_APPROVED/
+  // CYCLE_ADDITION_DECLINED instead of its own near-duplicate pair. Both
+  // represent "someone approved/declined a project" from the reader's
+  // perspective; which workflow triggered it is still in `details`.
 
 export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   LOGIN_SUCCESS: 'Login',
@@ -34,11 +46,12 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   LOGOUT: 'Logout',
   REGISTRATION_APPROVED: 'Registration Approved',
   REGISTRATION_REJECTED: 'Registration Rejected',
-  ROLE_CHANGED: 'Role Changed',
+  CSAT_CYCLE_CREATED: 'CSAT Cycle Created',
+  PROJECT_ENROLLED: 'Project Added to Cycle',
   CYCLE_ELIGIBILITY_CHANGED: 'Eligibility Changed',
   CYCLE_ADDITION_APPROVED: 'Project Addition Approved',
   CYCLE_ADDITION_DECLINED: 'Project Addition Declined',
-  PROJECT_SOFT_DELETED: 'Project Deleted',
+  PROJECT_STAGING_TRIAGED: 'Project Triaged (Staging)',
   FEEDBACK_SENT: 'Feedback Sent',
 };
 

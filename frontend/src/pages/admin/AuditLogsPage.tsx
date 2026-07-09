@@ -58,6 +58,26 @@ function fmtTime(iso: string | null): string {
   });
 }
 
+// The ENTITY column used to just show the raw entity_type/entity_id pair
+// (e.g. "cycle_project_enrollment #42") — technically accurate, but not
+// what anyone actually wants to read. `details` already carries the real
+// project name (or cycle name, or email) for practically every event we
+// log, so prefer that and only fall back to the raw pair when there's
+// nothing human-readable to show (e.g. LOGIN/LOGOUT have no entity at all).
+function entityLabel(e: AuditLogEntry): string {
+  if (e.details) {
+    try {
+      const parsed = JSON.parse(e.details);
+      if (parsed.project_name) return parsed.project_name;
+      if (parsed.cycle_name) return parsed.cycle_name;
+      if (parsed.email) return parsed.email;
+    } catch {
+      // details wasn't valid JSON — fall through to the raw pair below
+    }
+  }
+  return e.entity_type ? `${e.entity_type} #${e.entity_id}` : '—';
+}
+
 // ── Tab 1: Login Activity (existing, unchanged behavior) ──────────────────
 function LoginActivityTab() {
   const [search, setSearch] = useState('');
@@ -240,9 +260,9 @@ function ActivityLogTab() {
               <table className="w-full">
                 <thead>
                   <tr style={{ background: '#F8FAF9', borderBottom: '2px solid #E5E7EB' }}>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Actor</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Employee</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Action</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Entity</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Project Name</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">When</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">IP</th>
                   </tr>
@@ -260,7 +280,7 @@ function ActivityLogTab() {
                         </td>
                         <td className="px-6 py-4"><ActionBadge action={e.action} success={e.success} /></td>
                         <td className="px-6 py-4 text-sm text-gray-500">
-                          {e.entity_type ? `${e.entity_type} #${e.entity_id}` : '—'}
+                          {entityLabel(e)}
                         </td>
                         <td className="px-6 py-4 text-sm" style={{ color: BRAND.textMid }}>{fmtTime(e.created_at)}</td>
                         <td className="px-6 py-4 text-xs text-gray-400">{e.ip_address ?? '—'}</td>
