@@ -55,6 +55,7 @@ const NAV_ITEMS: NavItem[] = [
     icon:  '⚑',
     roles: [UserRole.MANAGEMENT],
   },
+
   {
     label: 'Reports',
     path:  ROUTES.REPORTS,
@@ -63,16 +64,10 @@ const NAV_ITEMS: NavItem[] = [
   },
   
   {
-    label: 'Audit Logs',
-    path:  ROUTES.ADMIN_AUDIT_LOGS,
-    icon:  '☰',
-    roles: [UserRole.QUALITY ],
-  },
-  {
-    label: 'Allow User',
-    path:  '/allow-user',
-    icon:  '✓',
-    roles: [UserRole.QUALITY, UserRole.MANAGEMENT],
+    label: 'Settings',
+    path:  ROUTES.SETTINGS,
+    icon:  '⚙',
+    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
   },
 ];
 

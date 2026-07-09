@@ -6,7 +6,7 @@ TWO database connections:
   2. tmstestdb1     → TL's server (READ ONLY — SELECT only)
 """
 
-from mdurl import URL
+from sqlalchemy import URL
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -15,7 +15,7 @@ from app.config import settings
 #==================================================================
 # For NKs Laptop (local MySQL) - csat_tool_db
 #==================================================================
-LOCAL_DATABASE_URL = URL.create(
+'''LOCAL_DATABASE_URL = URL.create(
     "mysql+pymysql",
     username="csat_user",
     password="B@B@n2001",
@@ -29,10 +29,10 @@ local_engine = create_engine(
     pool_pre_ping=True,       # reconnect if connection dropped
     pool_recycle=3600,        # recycle connections every 1 hour
     echo=False,               # set True to log all SQL (debug only)
-)
+)'''
 #============================================================================================
 
-'''
+
 # ============================================================
 # 1. LOCAL DB — csat_tool_db
 #    Full access — read & write
@@ -43,7 +43,7 @@ local_engine = create_engine(
     pool_recycle=3600,        # recycle connections every 1 hour
     echo=False,               # set True to log all SQL (debug only)
 )
-'''
+
 LocalSessionFactory = sessionmaker(
     bind=local_engine,
     autocommit=False,

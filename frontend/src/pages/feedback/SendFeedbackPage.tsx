@@ -13,7 +13,6 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { useQuery } from '@tanstack/react-query';
 import { PageWrapper }    from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useCompletedProjects, useProject } from '../../hooks/useProjects';
@@ -22,16 +21,16 @@ import { feedbackApi }    from '../../api/feedback.api';
 import { csatCyclesApi }  from '../../api/csat-cycles.api';
 import { projectStagingApi } from '../../api/project-staging.api';
 import { BRAND }          from '../../utils/constants';
- 
+
 // ── helpers ───────────────────────────────────────────────────────────────────
- 
+
 function fmtDate(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
   });
 }
- 
+
 function isTestingPurpose(end_date: string | null) {
   return !!end_date && new Date(end_date).getFullYear() === 2099;
 }
@@ -45,11 +44,11 @@ function formatDateToDDMMYYYY(dateStr: string) {
   }
   return dateStr;
 }
- 
+
 // ── step indicator ─────────────────────────────────────────────────────────────
- 
+
 const STEPS = ['Select Project', 'Customer Details', 'Review & Send'];
- 
+
 const StepBar: React.FC<{ current: number }> = ({ current }) => (
   <div style={{ display: 'flex', alignItems: 'center', marginBottom: 32 }}>
     {STEPS.map((label, i) => {
@@ -87,9 +86,9 @@ const StepBar: React.FC<{ current: number }> = ({ current }) => (
     })}
   </div>
 );
- 
+
 // ── Step 1: Project picker ─────────────────────────────────────────────────────
- 
+
 const ProjectPicker: React.FC<{
   selected: TMSProject | null;
   onSelect: (p: TMSProject) => void;
@@ -303,18 +302,18 @@ const ProjectPicker: React.FC<{
     </div>
   );
 };
- 
+
 // ── Step 2: Customer details form ──────────────────────────────────────────────
- 
+
 interface CustomerForm {
   recipientName:       string;
   recipientEmail:      string;
   message:             string;
   periodStart:         string;
   periodEnd:           string;
-  cc:             string;   // comma-separated emails, optional
+  cc:                  string;   // comma-separated emails, optional
 }
- 
+
 const CustomerDetailsStep: React.FC<{
   form: CustomerForm;
   onChange: (f: CustomerForm) => void;
@@ -324,7 +323,7 @@ const CustomerDetailsStep: React.FC<{
   const set = (key: keyof CustomerForm) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       onChange({ ...form, [key]: e.target.value });
- 
+
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '10px 12px', boxSizing: 'border-box',
     border: `1.5px solid ${BRAND.border}`, borderRadius: 8,
@@ -422,7 +421,7 @@ const CustomerDetailsStep: React.FC<{
           </div>
         </div>
       </div>
- 
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div>
           <label style={labelStyle}>Recipient Name *</label>
@@ -445,7 +444,7 @@ const CustomerDetailsStep: React.FC<{
           />
         </div>
       </div>
- 
+
       <div>
         <label style={labelStyle}>CC (optional)</label>
         <input
@@ -456,7 +455,7 @@ const CustomerDetailsStep: React.FC<{
           style={inputStyle}
         />
       </div>
- 
+
       <div>
         <label style={labelStyle}>Personal Message (optional)</label>
         <textarea
@@ -470,9 +469,9 @@ const CustomerDetailsStep: React.FC<{
     </div>
   );
 };
- 
+
 // ── Step 3: Review & confirm ───────────────────────────────────────────────────
- 
+
 const ReviewStep: React.FC<{
   project: TMSProject;
   form: CustomerForm;
@@ -489,13 +488,13 @@ const ReviewStep: React.FC<{
       <span style={{ fontSize: 13, color: BRAND.textDark }}>{value}</span>
     </div>
   );
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: 0 }}>
         Please review the details before sending. The customer will receive a secure feedback link by email.
       </p>
- 
+
       {/* Project card */}
       <div style={{
         background: '#fff', border: `1px solid ${BRAND.border}`,
@@ -508,11 +507,11 @@ const ReviewStep: React.FC<{
         }}>Project</p>
         <Row label="Project ID"   value={`#${project.project_id}`} />
         <Row label="Project Name" value={project.project_name} />
-        <Row label="PM"           value={project.project_manager_id ?? '—'} />
+        <Row label="PM"           value={project.project_manager_name ?? project.project_manager_id ?? '—'} />
         <Row label="Completed"    value={fmtDate(project.end_date)} />
         <div style={{ paddingBottom: 8 }} />
       </div>
- 
+
       {/* Customer card */}
       <div style={{
         background: '#fff', border: `1px solid ${BRAND.border}`,
@@ -527,11 +526,10 @@ const ReviewStep: React.FC<{
         <Row label="Email" value={form.recipientEmail} />
         <Row label="Period" value={`${formatDateToDDMMYYYY(form.periodStart)} to ${formatDateToDDMMYYYY(form.periodEnd)}`} />
         {form.cc.trim() && <Row label="CC" value={form.cc} />}
-        <Row label="Period" value={`${formatDateToDDMMYYYY(form.periodStart)} to ${formatDateToDDMMYYYY(form.periodEnd)}`} />
         {form.message && <Row label="Message" value={form.message} />}
         <div style={{ paddingBottom: 8 }} />
       </div>
- 
+
       {/* Info banner */}
       <div style={{
         background: '#EFF6FF', border: '1px solid #BFDBFE',
@@ -545,9 +543,9 @@ const ReviewStep: React.FC<{
     </div>
   );
 };
- 
+
 // ── Success screen ─────────────────────────────────────────────────────────────
- 
+
 const SuccessScreen: React.FC<{
   project: TMSProject;
   recipientEmail: string;
@@ -593,14 +591,14 @@ const SuccessScreen: React.FC<{
     </div>
   );
 };
- 
+
 // ── Main page ──────────────────────────────────────────────────────────────────
- 
+
 export const SendFeedbackPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
- 
+
   // Project can be preselected two ways:
   //  1. ?project_id=X query param (legacy / direct links)
   //  2. navigate('/feedback/send', { state: { cycleId, projectId, enrollmentId } })
@@ -610,35 +608,33 @@ export const SendFeedbackPage: React.FC = () => {
   };
   const preselectedId = navState.projectId ?? (Number(searchParams.get('project_id')) || undefined);
   const cycleId        = navState.cycleId ?? 0;
- 
+
   // Where "Back"/"Cancel" should return to. If we arrived from a CSAT Cycle's
   // detail page (state.cycleId present), go back there; otherwise the
   // general Feedback list.
   const returnTo  = navState.cycleId ? `/csat-cycles/${navState.cycleId}` : '/feedback';
   const returnLabel = navState.cycleId ? 'Back to Cycle' : 'Back to Feedback';
- 
+
   // If a project came preselected, the flow starts at step 1 (Customer
   // Details) and the picker (step 0) is skipped — so "Back" from step 1
   // should return to returnTo, not reveal the picker.
   const entryStep = preselectedId !== undefined ? 1 : 0;
- 
+
   const [step, setStep]               = useState(0);
   const [selectedProject, setSelected] = useState<TMSProject | null>(null);
   const [customerForm, setCustomerForm] = useState<CustomerForm>({
-    recipientName:            '',
-    recipientEmail:           '',
-    message:             '',
-    periodStart:         '',
-    periodEnd:           '',
-    cc:                  '',
-    periodStart:         '',
-    periodEnd:           '',
+    recipientName:  '',
+    recipientEmail: '',
+    message:        '',
+    periodStart:    '',
+    periodEnd:      '',
+    cc:             '',
   });
   const [cycleDatesFilled, setCycleDatesFilled] = useState(false);
   const [sending, setSending]   = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [success, setSuccess]   = useState(false);
- 
+
   // Selecting a project only sets which project the feedback is for — it no
   // longer pre-fills the Customer Recipient fields with the project's PM.
   // Previously this defaulted recipientName/recipientEmail to the PM's own
@@ -650,14 +646,14 @@ export const SendFeedbackPage: React.FC = () => {
   const applyProjectSelection = (p: TMSProject) => {
     setSelected(p);
   };
- 
+
   // If a project was preselected (via query param or nav state), skip step 1
   // and jump straight to Customer Details once it's loaded.
   const { data: preProject } = useProject(Number(preselectedId));
   React.useEffect(() => {
     if (preProject && !selectedProject) {
       applyProjectSelection(preProject);
-      
+
       let popStart = '';
       let popEnd = '';
       if (preProject.start_date && preProject.end_date) {
@@ -669,20 +665,7 @@ export const SendFeedbackPage: React.FC = () => {
         }
       }
       setCustomerForm(prev => ({ ...prev, periodStart: popStart, periodEnd: popEnd }));
-      
-      
-      let popStart = '';
-      let popEnd = '';
-      if (preProject.start_date && preProject.end_date) {
-        try {
-          popStart = new Date(preProject.start_date).toISOString().split('T')[0];
-          popEnd = new Date(preProject.end_date).toISOString().split('T')[0];
-        } catch (e) {
-          // fallback if invalid date
-        }
-      }
-      setCustomerForm(prev => ({ ...prev, periodStart: popStart, periodEnd: popEnd }));
-      
+
       setStep(1);
     }
   }, [preProject, selectedProject]);
@@ -705,9 +688,8 @@ export const SendFeedbackPage: React.FC = () => {
       }
     }
   }, [cycleData, cycleId]);
- 
+
   // Validation per step
-  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const canNext = () => {
     if (step === 0) return !!selectedProject;
     if (step === 1) {
@@ -719,7 +701,7 @@ export const SendFeedbackPage: React.FC = () => {
     }
     return true;
   };
- 
+
   const handleSend = async () => {
     if (!selectedProject) return;
     setSending(true);
@@ -727,15 +709,13 @@ export const SendFeedbackPage: React.FC = () => {
     const ccList = customerForm.cc.split(',').map(e => e.trim()).filter(Boolean);
     try {
       await feedbackApi.createRequest({
-        projectId:                selectedProject.project_id,
-        recipientEmail:           customerForm.recipientEmail.trim(),
-        recipientName:            customerForm.recipientName.trim(),
-        csatCycleId:              cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
+        projectId:           selectedProject.project_id,
+        recipientEmail:      customerForm.recipientEmail.trim(),
+        recipientName:       customerForm.recipientName.trim(),
+        csatCycleId:         cycleId,   // wired from nav state (CSAT Cycle detail "Send Feedback" button)
         periodOfPerformance: `${formatDateToDDMMYYYY(customerForm.periodStart)} to ${formatDateToDDMMYYYY(customerForm.periodEnd)}`,
         message:             customerForm.message.trim(),
-        cc:             ccList.length > 0 ? ccList : undefined,
-        periodOfPerformance: `${formatDateToDDMMYYYY(customerForm.periodStart)} to ${formatDateToDDMMYYYY(customerForm.periodEnd)}`,
-        message:             customerForm.message.trim(),
+        cc:                  ccList.length > 0 ? ccList : undefined,
       });
       setSuccess(true);
     } catch (err: any) {
@@ -746,19 +726,19 @@ export const SendFeedbackPage: React.FC = () => {
       setSending(false);
     }
   };
- 
+
   const reset = () => {
     setStep(0);
     setSelected(null);
-    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', periodStart: '', periodEnd: '', cc: '', periodStart: '', periodEnd: '' });
+    setCustomerForm({ recipientName: '', recipientEmail: '', message: '', periodStart: '', periodEnd: '', cc: '' });
     setSendError(null);
     setSuccess(false);
   };
- 
+
   return (
     <PageWrapper>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
- 
+
         {/* Page header */}
         <div style={{ marginBottom: 28 }}>
           <button
@@ -777,7 +757,7 @@ export const SendFeedbackPage: React.FC = () => {
             Send Feedback Form
           </h1>
         </div>
- 
+
         {/* Card */}
         <div style={{
           background: '#fff', borderRadius: 12,
@@ -794,7 +774,7 @@ export const SendFeedbackPage: React.FC = () => {
           ) : (
             <>
               <StepBar current={step} />
- 
+
               {step === 0 && (
                 <ProjectPicker
                   selected={selectedProject}
@@ -827,7 +807,7 @@ export const SendFeedbackPage: React.FC = () => {
                   form={customerForm}
                 />
               )}
- 
+
               {/* Error */}
               {sendError && (
                 <div style={{
@@ -838,7 +818,7 @@ export const SendFeedbackPage: React.FC = () => {
                   {sendError}
                 </div>
               )}
- 
+
               {/* Footer actions */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between',
@@ -853,7 +833,7 @@ export const SendFeedbackPage: React.FC = () => {
                     fontSize: 13, fontWeight: 600, color: BRAND.textMid, cursor: 'pointer',
                   }}
                 >{step === entryStep ? 'Cancel' : '← Back'}</button>
- 
+
                 {step < STEPS.length - 1 ? (
                   <button
                     onClick={() => setStep(s => s + 1)}
@@ -897,7 +877,8 @@ export const SendFeedbackPage: React.FC = () => {
           )}
         </div>
       </div>
- 
+      {/* /home/sanjukta/CSAT_TOOL/frontend/src/pages/feedback/FeedbackRequestListPage.tsx */}
+
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </PageWrapper>
   );

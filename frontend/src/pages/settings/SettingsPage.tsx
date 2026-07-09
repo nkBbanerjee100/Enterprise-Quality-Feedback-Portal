@@ -7,11 +7,10 @@
  *   - QUALITY:     + "Allow User" tab  + "Audit Logs" tab
  *   - MANAGEMENT:  + "Allow User" tab
  *
- * The Allow User / Audit Logs content itself is unchanged — this page just
- * embeds the same components that used to live at /allow-user and
- * /admin/audit-logs, reached via the sidebar. Those routes still exist for
- * direct links, but the sidebar no longer lists them separately; Settings
- * is now the one place to find them.
+ * The Allow User / Audit Logs content is unchanged — this page embeds
+ * the same components that previously lived at /allow-user and
+ * /admin/audit-logs. Those routes still exist for direct links, but the
+ * sidebar no longer lists them separately.
  */
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -19,13 +18,13 @@ import { PageWrapper } from '../../components/layout/PageWrapper';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
 import { projectsApi } from '../../api/projects.api';
-import { AllowUserContent } from '../auth/AllowUserPage';
+import { AllowUserContent } from './SettingsAllowUser';
 import { AuditLogsContent } from '../admin/AuditLogsPage';
 import { BRAND } from '../../utils/constants';
 
 type TabKey = 'details' | 'allow-user' | 'audit-logs';
 
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
@@ -147,9 +146,7 @@ export const SettingsPage: React.FC = () => {
           <p className="text-sm text-gray-500 mt-1">Your account details{showAllowUser || showAuditLogs ? ', plus admin tools' : ''}.</p>
         </div>
 
-        {/* Only show tab bar when there's more than one tab — Manager /
-            everyone-else just sees My Details (+ My Projects for Manager)
-            directly, no need for a single-tab bar. */}
+        {/* Tab bar — only when there's more than one tab */}
         {tabs.length > 1 && (
           <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #E5E7EB' }}>
             {tabs.map(t => (

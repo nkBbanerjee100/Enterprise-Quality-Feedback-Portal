@@ -21,39 +21,41 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './api/client';
 
 // Home page (public landing)
-import { HomePage } from './pages/home/HomePage';
+import { HomePage }         from './pages/home/HomePage';
 
 // Auth pages
-import { LoginPage } from './pages/auth/LoginPage';
-
+import { LoginPage }        from './pages/auth/LoginPage';
 //import { ActivateAccountPage } from './pages/auth/ActivateAccountPage';
-import { AllowUserPage } from './pages/auth/AllowUserPage';
+import { AllowUserPage }    from './pages/auth/AllowUserPage';
 import { SelfRegisterPage } from './pages/auth/SelfRegisterPage';
 import { UnauthorizedPage } from './pages/auth/UnauthorizedPage';
 
 // Role dashboards
 import { QualityUserDashboard } from './pages/dashboard/QualityUserDashboard';
-import { ManagementDashboard } from './pages/reports/ManagementDashboard';
+import { ManagementDashboard }  from './pages/reports/ManagementDashboard';
 
 // Shared pages
-import { CsatCycleListPage } from './pages/csat-cycles/CsatCycleListPage';
+import { CsatCycleListPage }    from './pages/csat-cycles/CsatCycleListPage';
 import { PendingReviewsPage }   from './pages/reviews/PendingReviewsPage';
-import { CsatCycleDetailPage } from './pages/csat-cycles/CsatCycleDetailPage';
-import { SelectProjectsPage } from './pages/csat-cycles/SelectProjectsPage';
-import { ProjectListPage } from './pages/projects/ProjectListPage';
-import { ProjectDetailPage } from './pages/projects/ProjectDetailPage';
+import { CsatCycleDetailPage }  from './pages/csat-cycles/CsatCycleDetailPage';
+import { SelectProjectsPage }   from './pages/csat-cycles/SelectProjectsPage';
+import { ProjectListPage }      from './pages/projects/ProjectListPage';
+import { ProjectDetailPage }    from './pages/projects/ProjectDetailPage';
 import { FeedbackRequestListPage } from './pages/feedback/FeedbackRequestListPage';
 import { SendFeedbackPage }     from './pages/feedback/SendFeedbackPage';
 import { CustomerSurveyPage }   from './pages/feedback/CustomerSurveyPage';
+//import { ActionPlanListPage }   from './pages/action-plans/ActionPlanListPage';
+//import { ActionPlanDetailPage } from './pages/action-plans/ActionPlanDetailPage';
 import { ReportsPage }          from './pages/reports/ReportsPage';
 import { UserManagementPage }   from './pages/admin/UserManagementPage';
 import { AuditLogsPage }        from './pages/admin/AuditLogsPage';
+import { SettingsPage }         from './pages/settings/SettingsPage';
 
 // Guards
-import { ProtectedRoute } from './components/common/ProtectedRoute';
+import { ProtectedRoute }     from './components/common/ProtectedRoute';
 import { RoleProtectedRoute } from './components/common/RoleProtectedRoute';
-import { AuthInitializer } from './components/common/AuthInitializer';
-import { UserRole } from './types/auth.types';
+import { AuthInitializer }    from './components/common/AuthInitializer';
+import { UserRole }           from './types/auth.types';
 
 function App() {
   return (
@@ -67,11 +69,11 @@ function App() {
         <AuthInitializer>
           <Routes>
             {/* ── Public routes ─────────────────────────────────────────── */}
-            <Route path="/login" element={<LoginPage />} />
+            <Route path="/login"           element={<LoginPage />} />
             {/* //<Route path="/activate"        element={<ActivateAccountPage />} /> */}
-            <Route path="/register-self" element={<SelfRegisterPage />} />
-            <Route path="/unauthorized" element={<UnauthorizedPage />} />
-            <Route path="/survey/:token" element={<CustomerSurveyPage />} />
+            <Route path="/register-self"   element={<SelfRegisterPage />} />
+            <Route path="/unauthorized"    element={<UnauthorizedPage />} />
+            <Route path="/survey/:token"   element={<CustomerSurveyPage />} />
 
             {/* Register — public. Anyone can land here, but the backend only
                 lets the registration succeed for emails already allow-listed
@@ -83,7 +85,7 @@ function App() {
               path="/allow-user"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <AllowUserPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -96,7 +98,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <RoleProtectedRoute
-                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES, UserRole.MANAGER, UserRole.MANAGEMENT]}
+                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}
                   >
                     <QualityUserDashboard />
                   </RoleProtectedRoute>
@@ -110,7 +112,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <RoleProtectedRoute
-                    allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY, UserRole.SALES, UserRole.MANAGER, UserRole.MANAGEMENT]}
+                    allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY , UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}
                   >
                     <ManagementDashboard />
                   </RoleProtectedRoute>
@@ -123,7 +125,7 @@ function App() {
               path="/reports/full"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY, UserRole.SALES, UserRole.MANAGER, UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.DELIVERY, UserRole.QUALITY , UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <ReportsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -147,8 +149,8 @@ function App() {
               path="/csat-cycles"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER, UserRole.MANAGEMENT]}>
-                    <CsatCycleListPage />
+                   <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER , UserRole.MANAGEMENT]}>
+                  <CsatCycleListPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
               }
@@ -196,7 +198,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <RoleProtectedRoute
-                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES, UserRole.MANAGER, UserRole.MANAGEMENT]}
+                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT]}
                   >
                     <FeedbackRequestListPage />
                   </RoleProtectedRoute>
@@ -207,21 +209,50 @@ function App() {
               path="/feedback/send"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES, UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGEMENT]}>
                     <SendFeedbackPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
               }
             />
 
-            
+            {/* ── Action Plans ───────────────────────────────────────────── */}
+            {/* Temporarily disabled — src/pages/action-plans/ is missing from
+                this build, and the imports above are commented out to match.
+                Restore both the imports and these two <Route> blocks together
+                once that folder is back. Leaving these active with no import
+                crashes the entire app on load (ReferenceError), since <Routes>
+                evaluates every <Route element={...}> immediately regardless
+                of which path is active. */}
+            {/*
+            <Route
+              path="/action-plans"
+              element={
+                <ProtectedRoute>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
+                    <ActionPlanListPage />
+                  </RoleProtectedRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/action-plans/:id"
+              element={
+                <ProtectedRoute>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
+                    <ActionPlanDetailPage />
+                  </RoleProtectedRoute>
+                </ProtectedRoute>
+              }
+            />
+            */}
 
             {/* ── Admin (Quality_Admin only — Phase 2) ───────────────────── */}
             <Route
               path="/admin/users"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER, UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <UserManagementPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -231,7 +262,7 @@ function App() {
               path="/admin/audit-logs"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER, UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY]}>
                     <AuditLogsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
@@ -242,8 +273,22 @@ function App() {
               path="/admin"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGER, UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
                     <QualityUserDashboard />
+                  </RoleProtectedRoute>
+                </ProtectedRoute>
+              }
+            />
+
+            {/* ── Settings — role-aware content is decided inside the page itself ── */}
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <RoleProtectedRoute
+                    allowedRoles={[UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES, UserRole.MANAGER, UserRole.MANAGEMENT]}
+                  >
+                    <SettingsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
               }
@@ -255,8 +300,8 @@ function App() {
               Authenticated users are immediately redirected inside
               HomePage itself via a useEffect, so no flash occurs.
             */}
-            <Route path="/" element={<HomePage />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/"  element={<HomePage />} />
+            <Route path="*"  element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </AuthInitializer>
       </Router>
