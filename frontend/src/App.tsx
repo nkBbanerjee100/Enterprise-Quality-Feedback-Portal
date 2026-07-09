@@ -262,7 +262,7 @@ function App() {
               path="/admin/audit-logs"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY  ,UserRole.MANAGER , UserRole.MANAGEMENT]}>
+                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY]}>
                     <AuditLogsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>
