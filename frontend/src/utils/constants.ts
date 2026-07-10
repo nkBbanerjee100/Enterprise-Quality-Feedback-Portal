@@ -47,6 +47,7 @@ export const ROUTES = {
 
   // Management User default landing
   REPORTS:            '/reports',
+  SETTINGS:           '/settings',
 
   // Shared
   PROJECTS:           '/projects',
@@ -64,7 +65,6 @@ export const ROUTES = {
   // Admin only
   ADMIN_USERS:        '/admin/users',
   ADMIN_AUDIT_LOGS:   '/admin/audit-logs',
-  SETTINGS:           '/settings',
 } as const;
 
 // Brand colours (Mindteck design system)

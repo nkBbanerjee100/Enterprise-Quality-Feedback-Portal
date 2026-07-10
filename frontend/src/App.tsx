@@ -25,6 +25,7 @@ import { HomePage }         from './pages/home/HomePage';
 
 // Auth pages
 import { LoginPage }        from './pages/auth/LoginPage';
+import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
 //import { ActivateAccountPage } from './pages/auth/ActivateAccountPage';
 import { AllowUserPage }    from './pages/auth/AllowUserPage';
 import { SelfRegisterPage } from './pages/auth/SelfRegisterPage';
@@ -70,6 +71,7 @@ function App() {
           <Routes>
             {/* ── Public routes ─────────────────────────────────────────── */}
             <Route path="/login"           element={<LoginPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             {/* //<Route path="/activate"        element={<ActivateAccountPage />} /> */}
             <Route path="/register-self"   element={<SelfRegisterPage />} />
             <Route path="/unauthorized"    element={<UnauthorizedPage />} />

@@ -877,7 +877,6 @@ export const SendFeedbackPage: React.FC = () => {
           )}
         </div>
       </div>
-      {/* /home/sanjukta/CSAT_TOOL/frontend/src/pages/feedback/FeedbackRequestListPage.tsx */}
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </PageWrapper>

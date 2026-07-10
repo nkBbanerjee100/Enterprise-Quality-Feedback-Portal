@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     # Database
-    LOCAL_DATABASE_URL: str = "mysql+pymysql://csat_user:Admin%40123@localhost:3306/csat_tool_db"
+    LOCAL_DATABASE_URL: str = "mysql+pymysql://csat_user:Admin%401231@localhost:3306/csat_tool_db"
     TMS_DATABASE_URL: str = "mysql+pymysql://root:Mind@123@172.16.5.115:3306/tmstestdb1"
 
     # JWT

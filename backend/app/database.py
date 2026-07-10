@@ -6,7 +6,7 @@ TWO database connections:
   2. tmstestdb1     → TL's server (READ ONLY — SELECT only)
 """
 
-from sqlalchemy import URL
+#from mdurl import URL
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base

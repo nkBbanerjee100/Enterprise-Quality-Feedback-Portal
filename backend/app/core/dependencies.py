@@ -46,7 +46,7 @@ async def get_current_user(
     # 3. Fetch user from DB
     row = db.execute(
         text("""
-            SELECT EmpId, EmpFirstName, EmpLastName, Email, role, is_active
+            SELECT EmpId, EmpFirstName, EmpLastName, Email, role, is_active, created_at
             FROM csat_users WHERE EmpId = :emp_id LIMIT 1
         """),
         {"emp_id": emp_id},
@@ -70,6 +70,7 @@ async def get_current_user(
         "email":     row.Email,
         "role":      row.role,
         "is_active": row.is_active,
+        "joined_at": row.created_at,
     }
 
 
