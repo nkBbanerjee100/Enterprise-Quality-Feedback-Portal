@@ -2,16 +2,16 @@
 =============================================================
 Reads project data directly from the TMS database (tsms_projects),
 which lives on a separate read-only MySQL server.
- 
+
 All queries here are SELECT only — this app never writes to TMS.
- 
+
 Table: tsms_projects
 Fields used:
   Id, OcnId, Name, StartDate, EndDate, PmId, DMId,
   AdditionalPmId, AdditionalDMId, LocId, SubLocId,
   IsInternalProject, IsCustomerApprovalRequired,
   CreditTerms, TSATValue, RiskRYG, IsProjectActive
- 
+
 Endpoints:
   GET  /api/tms/status              -> health check of TMS connection
   GET  /api/tms/projects            -> all projects (paginated + search + filter)
@@ -27,10 +27,10 @@ from typing import Optional
 from datetime import datetime, date, timezone
 
 from app.database import get_tms_db
- 
+
 router = APIRouter()
- 
- 
+
+
 # Columns mapped to friendly snake_case names
 PROJECT_COLUMNS = """
     Id                         AS project_id,
@@ -51,8 +51,8 @@ PROJECT_COLUMNS = """
     RiskRYG                    AS risk_status,
     IsProjectActive            AS is_active
 """
- 
- 
+
+
 def _row_to_dict(row) -> dict:
     """Convert a SQLAlchemy row to a JSON-safe dict."""
     d = dict(row._mapping)
@@ -65,21 +65,8 @@ def _row_to_dict(row) -> dict:
         if key in d and isinstance(d[key], datetime):
             d[key] = d[key].isoformat()
     return d
- 
 
-def _row_with_pm(row) -> dict:
-    """Same as _row_to_dict, plus the resolved PM name/emp_id/email columns
-    that queries joining tsms_user (aliased `pm`) add on top of PROJECT_COLUMNS.
-    Shared by every endpoint below that needs a project's PM contact info —
-    e.g. the Send Feedback form, which needs project_manager_email to
-    pre-fill the recipient."""
-    d = _row_to_dict(row)
-    d["project_manager_name"] = (row.project_manager_name or "").strip() or None
-    d["project_manager_emp_id"] = row.project_manager_emp_id
-    d["project_manager_email"] = row.project_manager_email
-    return d
 
- 
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /api/tms/status
 # ──────────────────────────────────────────────────────────────────────────────
@@ -102,8 +89,8 @@ def get_tms_status(tms_db: Session = Depends(get_tms_db)):
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "error": str(e),
         }
- 
- 
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /api/tms/projects
 # All projects — paginated, searchable, filterable by active status
@@ -116,6 +103,7 @@ def list_tms_projects(
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     pm: Optional[str] = Query(None, description="Filter by project manager emp_id"),
     year: Optional[int] = Query(None, description="Filter by project start year"),
+    include_count: bool = Query(True, description="Set false to skip the COUNT(*) query when the caller never reads `total`"),
     tms_db: Session = Depends(get_tms_db),
 ):
     """
@@ -127,14 +115,20 @@ def list_tms_projects(
     TMS integration) — needed so callers like the "Add Projects" modal on
     CsatCycleDetailPage can filter/display by manager, same as the
     pre-cycle Select Projects page already does.
+
+    include_count=false skips the separate COUNT(*) query, which runs the
+    exact same PM-resolving join as the main SELECT — worth skipping for any
+    caller that fetches everything in one page and never displays `total`
+    (this was previously always run and silently ignored by the Add
+    Projects modal, which only ever reads `.projects`).
     """
     conditions = []
     params: dict = {"skip": skip, "limit": limit}
- 
+
     if search:
         conditions.append("p.Name LIKE :search")
         params["search"] = f"%{search}%"
- 
+
     if is_active is not None:
         conditions.append("p.IsProjectActive = :is_active")
         params["is_active"] = 1 if is_active else 0
@@ -157,8 +151,7 @@ def list_tms_projects(
     list_sql = text(f"""
         SELECT {PROJECT_COLUMNS},
                pm.EmpId AS project_manager_emp_id,
-               CONCAT_WS(' ', pm.EmpFirstName, pm.EmpLastName) AS project_manager_name,
-               pm.Email AS project_manager_email
+               CONCAT_WS(' ', pm.EmpFirstName, pm.EmpLastName) AS project_manager_name
         FROM tsms_projects p
         LEFT JOIN tsms_user pm
             ON p.PmId = pm.EmpId OR p.PmId = pm.FinanceId OR p.PmId = pm.UserId
@@ -175,13 +168,19 @@ def list_tms_projects(
     """)
 
     try:
-        rows  = tms_db.execute(list_sql,  params).fetchall()
-        total = tms_db.execute(count_sql, params).fetchone().total
+        rows = tms_db.execute(list_sql, params).fetchall()
+        total = tms_db.execute(count_sql, params).fetchone().total if include_count else None
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not query the TMS database: {exc}",
         )
+
+    def _row_with_pm(r):
+        d = _row_to_dict(r)
+        d["project_manager_name"] = (r.project_manager_name or "").strip() or None
+        d["project_manager_emp_id"] = r.project_manager_emp_id
+        return d
 
     return {
         "total":    total,
@@ -189,8 +188,20 @@ def list_tms_projects(
         "limit":    limit,
         "projects": [_row_with_pm(r) for r in rows],
     }
- 
- 
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /api/tms/projects/completed
+# Only feedback-eligible projects: IsProjectActive=0 AND EndDate IS NOT NULL
+# ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# Replace BOTH of these two functions in app/routers/tms_sync.py with the
+# versions below. Neither currently joins tsms_user at all — that's why
+# project_manager_name/emp_id/email never appear in their responses,
+# confirmed by the curl output showing only project_manager_id present.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /api/tms/projects/completed
 # Only feedback-eligible projects: IsProjectActive=0 AND EndDate IS NOT NULL
@@ -207,25 +218,25 @@ def get_completed_projects(
     """Paginated list of completed projects from TMS (tsms_projects).
     Returns completed projects from TMS — the ones Quality users
     can send feedback forms for.
-    A project is 'completed' when IsProjectActive=0 AND EndDate IS NOT NULL.
+    A project is 'completed' when EndDate IS NOT NULL and EndDate < today.
 
-    Also resolves project_manager_name/project_manager_emp_id/project_manager_email
-    (same PmId -> EmpId/FinanceId/UserId join used by /projects) — the Send
-    Feedback form pre-fills its recipient from the project's PM, so this
-    endpoint needs the same PM contact info /projects already returns.
-
-    pm/year filter the same way /projects does, except year here filters by
-    EndDate (when the project was completed) rather than StartDate — that's
-    the meaningful axis for a list that's already scoped to completed work.
+    Also resolves project_manager_name/project_manager_emp_id/
+    project_manager_email (same PmId -> EmpId/FinanceId/UserId join used by
+    /projects) — the Send Feedback form pre-fills its recipient from the
+    project's PM and shows the PM's name in the "Assigned Project Manager"
+    panel, so this endpoint needs the same PM contact info /projects
+    already returns. This was previously missing entirely, which is why
+    that panel showed "No PM assigned in TMS" even for projects that do
+    have a PM on record.
     """
     today = datetime.now(timezone.utc).date()
     conditions = ["p.EndDate IS NOT NULL", "p.EndDate < :today"]
     params: dict = {"skip": skip, "limit": limit, "today": today}
- 
+
     if search:
         conditions.append("p.Name LIKE :search")
         params["search"] = f"%{search}%"
- 
+
     if pm:
         conditions.append("pm.EmpId = :pm")
         params["pm"] = pm
@@ -236,7 +247,7 @@ def get_completed_projects(
         params["year_end"] = date(year + 1, 1, 1)
 
     where = "WHERE " + " AND ".join(conditions)
- 
+
     list_sql = text(f"""
         SELECT {PROJECT_COLUMNS},
                pm.EmpId AS project_manager_emp_id,
@@ -256,7 +267,7 @@ def get_completed_projects(
             ON p.PmId = pm.EmpId OR p.PmId = pm.FinanceId OR p.PmId = pm.UserId
         {where}
     """)
- 
+
     try:
         rows  = tms_db.execute(list_sql,  params).fetchall()
         total = tms_db.execute(count_sql, params).fetchone().total
@@ -265,15 +276,22 @@ def get_completed_projects(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not query the TMS database: {exc}",
         )
- 
+
+    def _row_with_pm(r):
+        d = _row_to_dict(r)
+        d["project_manager_name"] = (r.project_manager_name or "").strip() or None
+        d["project_manager_emp_id"] = r.project_manager_emp_id
+        d["project_manager_email"] = r.project_manager_email
+        return d
+
     return {
         "total":    total,
         "skip":     skip,
         "limit":    limit,
         "projects": [_row_with_pm(r) for r in rows],
     }
- 
- 
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /api/tms/projects/{project_id}
 # Single project detail by TMS Id
@@ -298,7 +316,7 @@ def get_project_by_id(
         WHERE p.Id = :project_id
         LIMIT 1
     """)
- 
+
     try:
         row = tms_db.execute(sql, {"project_id": project_id}).fetchone()
     except SQLAlchemyError as exc:
@@ -306,16 +324,18 @@ def get_project_by_id(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not query the TMS database: {exc}",
         )
- 
+
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project {project_id} not found in TMS.",
         )
- 
-    return _row_with_pm(row)
- 
- 
+
+    d = _row_to_dict(row)
+    d["project_manager_name"] = (row.project_manager_name or "").strip() or None
+    d["project_manager_emp_id"] = row.project_manager_emp_id
+    d["project_manager_email"] = row.project_manager_email
+    return d
 # ──────────────────────────────────────────────────────────────────────────────
 # POST /api/tms/projects/sync
 # Connectivity check — no local copy needed since we read TMS directly
@@ -330,14 +350,14 @@ def sync_tms_projects(tms_db: Session = Depends(get_tms_db)):
         total = tms_db.execute(
             text("SELECT COUNT(*) AS total FROM tsms_projects")
         ).fetchone().total
- 
+
         completed = tms_db.execute(
             text(
                 "SELECT COUNT(*) AS total FROM tsms_projects "
                 "WHERE IsProjectActive = 0 AND EndDate IS NOT NULL"
             )
         ).fetchone().total
- 
+
         return {
             "status":              "ok",
             "message":             "TMS is live — read directly from tsms_projects.",
@@ -350,8 +370,8 @@ def sync_tms_projects(tms_db: Session = Depends(get_tms_db)):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not reach the TMS database: {exc}",
         )
- 
- 
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /api/tms/employees/{emp_id}
 # Look up any Mindteck employee directly from tsms_user by EmpId.
@@ -382,7 +402,7 @@ def get_employee_by_id(
         WHERE EmpId = :emp_id OR FinanceId = :emp_id OR UserId = :emp_id
         LIMIT 1
     """)
- 
+
     try:
         row = tms_db.execute(sql, {"emp_id": emp_id}).fetchone()
     except SQLAlchemyError as exc:
@@ -390,20 +410,20 @@ def get_employee_by_id(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not query the TMS database: {exc}",
         )
- 
+
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Employee {emp_id} not found in TMS.",
         )
- 
+
     name_parts = [row.EmpFirstName or "", row.EmpMiddleName or "", row.EmpLastName or ""]
     full_name  = " ".join(p for p in name_parts if p).strip()
- 
+
     is_active = row.IsActive
     if isinstance(is_active, (bytes, bytearray)):
         is_active = bool(is_active[0])
- 
+
     return {
         "emp_id":              row.EmpId,
         "full_name":           full_name,
@@ -418,8 +438,8 @@ def get_employee_by_id(
         "delivery_mgr_id":     row.DeliveryMgrId,
         "delivery_mgr_name":   row.DeliveryMgrName,
     }
- 
- 
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /api/tms/projects/{project_id}/people
 # Returns PM, DM, Add.PM, Add.DM for a project in a single JOIN query.
@@ -448,7 +468,7 @@ def get_project_people(
             pm.grade            AS pm_grade,
             pm.ReportingMgrName AS pm_reporting_mgr,
             pm.DeliveryMgrName  AS pm_delivery_mgr,
- 
+
             dm.EmpId            AS dm_id,
             dm.EmpFirstName     AS dm_first,
             dm.EmpMiddleName    AS dm_middle,
@@ -461,7 +481,7 @@ def get_project_people(
             dm.grade            AS dm_grade,
             dm.ReportingMgrName AS dm_reporting_mgr,
             dm.DeliveryMgrName  AS dm_delivery_mgr,
- 
+
             apm.EmpId            AS apm_id,
             apm.EmpFirstName     AS apm_first,
             apm.EmpMiddleName    AS apm_middle,
@@ -474,7 +494,7 @@ def get_project_people(
             apm.grade            AS apm_grade,
             apm.ReportingMgrName AS apm_reporting_mgr,
             apm.DeliveryMgrName  AS apm_delivery_mgr,
- 
+
             adm.EmpId            AS adm_id,
             adm.EmpFirstName     AS adm_first,
             adm.EmpMiddleName    AS adm_middle,
@@ -487,7 +507,7 @@ def get_project_people(
             adm.grade            AS adm_grade,
             adm.ReportingMgrName AS adm_reporting_mgr,
             adm.DeliveryMgrName  AS adm_delivery_mgr
- 
+
         FROM tsms_projects p
         LEFT JOIN tsms_user pm  ON p.PmId          = pm.EmpId OR p.PmId          = pm.FinanceId OR p.PmId          = pm.UserId
         LEFT JOIN tsms_user dm  ON p.DMId           = dm.EmpId OR p.DMId           = dm.FinanceId OR p.DMId           = dm.UserId
@@ -496,7 +516,7 @@ def get_project_people(
         WHERE p.Id = :project_id
         LIMIT 1
     """)
- 
+
     try:
         row = tms_db.execute(sql, {"project_id": project_id}).fetchone()
     except SQLAlchemyError as exc:
@@ -504,18 +524,18 @@ def get_project_people(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not query the TMS database: {exc}",
         )
- 
+
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project {project_id} not found in TMS.",
         )
- 
+
     def _bit(val):
         if isinstance(val, (bytes, bytearray)):
             return bool(val[0])
         return bool(val) if val is not None else None
- 
+
     def _person(prefix, r):
         id_val = getattr(r, f"{prefix}_id")
         if not id_val:
@@ -536,7 +556,7 @@ def get_project_people(
             "reporting_mgr":    getattr(r, f"{prefix}_reporting_mgr"),
             "delivery_mgr":     getattr(r, f"{prefix}_delivery_mgr"),
         }
- 
+
     return {
         "project_manager":  _person("pm",  row),
         "delivery_manager": _person("dm",  row),

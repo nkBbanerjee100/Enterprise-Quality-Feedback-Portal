@@ -29,6 +29,13 @@ def _visible_filter(current_user: dict):
         action, even if they also belong to the role it was broadcast to —
         everyone else in that role, or the other named recipient, still see
         it normally.
+      AND
+      - it was created on or after the user's own account creation time
+        (joined_at). Without this, a brand-new signup — especially into a
+        broadcast role like MANAGEMENT — would immediately see every
+        historical notification ever sent to that role, going back before
+        they ever existed in the system. Only notifications from the point
+        they joined onward are relevant to them.
     """
     is_recipient = or_(
         Notification.recipient_emp_id == current_user["emp_id"],
@@ -38,7 +45,10 @@ def _visible_filter(current_user: dict):
         Notification.actor_emp_id.is_(None),
         Notification.actor_emp_id != current_user["emp_id"],
     )
-    return and_(is_recipient, not_the_actor)
+    conditions = [is_recipient, not_the_actor]
+    if current_user.get("joined_at"):
+        conditions.append(Notification.created_at >= current_user["joined_at"])
+    return and_(*conditions)
 
 
 def _to_responses(items: list[Notification], db: Session) -> list[NotificationResponse]:

@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.security import get_security_headers
-from app.routers import auth, users, csat_cycles, projects, feedback, dashboard, reports, tms_sync, notifications, project_staging, reviews
+from app.routers import auth, users, csat_cycles, projects, feedback, dashboard, reports, tms_sync, notifications, project_staging, reviews, audit
 
 
 @asynccontextmanager
@@ -66,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
     app.include_router(project_staging.router, prefix="/api/project-staging", tags=["Project Staging"])
     app.include_router(reviews.router, prefix="/api/reviews", tags=["Reviews"])
+    app.include_router(audit.router, prefix="/api/audit-logs", tags=["Audit"])
 
     return app
 
