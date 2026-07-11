@@ -45,6 +45,7 @@ import { ProjectDetailPage } from './pages/projects/ProjectDetailPage';
 import { FeedbackRequestListPage } from './pages/feedback/FeedbackRequestListPage';
 import { SendFeedbackPage }     from './pages/feedback/SendFeedbackPage';
 import { CustomerSurveyPage }   from './pages/feedback/CustomerSurveyPage';
+import { SurveyAccessPage } from './pages/feedback/SurveyAccessPage';
 import { ReportsPage }          from './pages/reports/ReportsPage';
 import { UserManagementPage }   from './pages/admin/UserManagementPage';
 import { AuditLogsPage }        from './pages/admin/AuditLogsPage';
@@ -64,14 +65,26 @@ function App() {
           from persisted token before rendering any protected content.
           It renders a loading screen until auth state is resolved.
         */}
-        <AuthInitializer>
+      
           <Routes>
             {/* ── Public routes ─────────────────────────────────────────── */}
-            <Route path="/login" element={<LoginPage />} />
-            {/* //<Route path="/activate"        element={<ActivateAccountPage />} /> */}
-            <Route path="/register-self" element={<SelfRegisterPage />} />
-            <Route path="/unauthorized" element={<UnauthorizedPage />} />
-            <Route path="/survey/:token" element={<CustomerSurveyPage />} />
+          <Route path="/login" element={<LoginPage />} />
+
+<Route path="/register-self" element={<SelfRegisterPage />} />
+
+<Route path="/unauthorized" element={<UnauthorizedPage />} />
+
+
+<Route
+  path="/survey-access"
+  element={<SurveyAccessPage />}
+/>
+
+
+<Route
+  path="/survey/:token"
+  element={<CustomerSurveyPage />}
+/>
 
             {/* Register — public. Anyone can land here, but the backend only
                 lets the registration succeed for emails already allow-listed
@@ -256,9 +269,9 @@ function App() {
               HomePage itself via a useEffect, so no flash occurs.
             */}
             <Route path="/" element={<HomePage />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </AuthInitializer>
+      
       </Router>
     </QueryClientProvider>
   );

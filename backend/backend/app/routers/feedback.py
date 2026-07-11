@@ -21,7 +21,10 @@ import hashlib
 import base64
 import json
 import time
+import string
+import secrets
 from datetime import datetime, timedelta
+
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel
 from typing import Optional, List
@@ -78,31 +81,41 @@ class SurveySubmitPayload(BaseModel):
     answers: list[SurveyAnswer]
 
 
+class VerifyTokenRequest(BaseModel):
+    email: str
+    token: str
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
 def _create_survey_token(project_id: int, recipient_email: str) -> str:
-    payload = {
-        "pid":   project_id,
-        "email": recipient_email,
-        "exp":   int(time.time()) + TOKEN_EXPIRY_SECONDS,
-    }
-    payload_b64 = base64.urlsafe_b64encode(
-        json.dumps(payload).encode()
-    ).decode().rstrip("=")
 
-    sig = hmac.new(
-        settings.secret_key.encode(),
-        payload_b64.encode(),
-        hashlib.sha256,
-    ).digest()
-    sig_b64 = base64.urlsafe_b64encode(sig).decode().rstrip("=")
+    characters = (
+        string.ascii_uppercase +
+        string.ascii_lowercase +
+        string.digits
+    )
 
-    return f"{payload_b64}.{sig_b64}"
+    return ''.join(
+        secrets.choice(characters)
+        for _ in range(12)
+    )
+
+
+def _hash_token(token: str) -> str:
+
+    return hashlib.sha256(
+        token.encode()
+    ).hexdigest()
 
 
 # ── Email builders ─────────────────────────────────────────────────────────────
 
-def _build_email_html(recipient_name: str, project_id: int, survey_link: str, personal_message: Optional[str]) -> str:
+def _build_email_html(
+    recipient_name: str,
+    project_id: int,
+    survey_link: str,
+    personal_message: Optional[str],
+    token: str
+) -> str:
     personal_block = ""
     if personal_message and personal_message.strip():
         personal_block = f"""
@@ -113,49 +126,138 @@ def _build_email_html(recipient_name: str, project_id: int, survey_link: str, pe
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
+
 <body style="margin:0;padding:0;background:#f9fafb;font-family:'Segoe UI',Arial,sans-serif;">
+
   <div style="max-width:560px;margin:40px auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
     <div style="background:#16a34a;padding:28px 32px;">
       <p style="margin:0;font-size:11px;font-weight:700;color:#bbf7d0;letter-spacing:0.1em;text-transform:uppercase;">
         Mindteck · Quality Feedback Platform
       </p>
-      <h1 style="margin:8px 0 0;font-size:22px;color:#ffffff;font-weight:700;">Your Feedback Matters</h1>
+
+      <h1 style="margin:8px 0 0;font-size:22px;color:#ffffff;font-weight:700;">
+        Your Feedback Matters
+      </h1>
     </div>
+
+
     <div style="padding:28px 32px;">
-      <p style="font-size:15px;color:#111827;margin:0 0 8px;">Dear <strong>{recipient_name}</strong>,</p>
+
+      <p style="font-size:15px;color:#111827;margin:0 0 8px;">
+        Dear <strong>{recipient_name}</strong>,
+      </p>
+
+
       <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 16px;">
         Thank you for working with us on project <strong>#{project_id}</strong>.
         We'd love to hear how your experience was.
       </p>
+
+
       {personal_block}
+
+
       <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 24px;">
         Please take a moment to <strong>submit your feedback</strong> using the button below.
       </p>
-      <div style="text-align:center;margin:28px 0;">
-        <a href="{survey_link}" style="display:inline-block;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
-          📋 Submit Your Feedback
-        </a>
+
+
+      <!-- Verification Token Added -->
+      <div style="text-align:center;margin:20px 0;padding:15px;background:#f0fdf4;border-radius:8px;">
+
+        <p style="font-size:14px;color:#374151;margin:0 0 8px;">
+          Your verification token:
+        </p>
+
+        <h2 style="margin:0;font-size:24px;color:#16a34a;letter-spacing:4px;">
+          {token}
+        </h2>
+
       </div>
+      <!-- End Verification Token -->
+
+
+      <div style="text-align:center;margin:28px 0;">
+
+        <a href="{survey_link}" 
+           style="display:inline-block;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+
+          📋 Submit Your Feedback
+
+        </a>
+
+      </div>
+
+
       <p style="font-size:12px;color:#6b7280;text-align:center;word-break:break-all;">
-        Or copy: <a href="{survey_link}" style="color:#16a34a;">{survey_link}</a>
+
+        Or copy:
+        <a href="{survey_link}" style="color:#16a34a;">
+          {survey_link}
+        </a>
+
       </p>
+
+
       <p style="font-size:12px;color:#6b7280;margin:16px 0 0;">
+
         This link will expire in <strong>30 days</strong>.
+
       </p>
+
+
     </div>
-    <div style="background:#f3f4f6;padding:16px 32px;border-top:1px solid #e5e7eb;">
-      <p style="margin:0;font-size:11px;color:#9ca3af;text-align:center;">© 2026 CSAT Tool · Quality Dept · Mindteck</p>
+
+
+    <div style="background:#f3f4f6;padding:16px 32px;border-top:1px solid e5e7eb;">
+
+      <p style="margin:0;font-size:11px;color:#9ca3af;text-align:center;">
+        © 2026 CSAT Tool · Quality Dept · Mindteck
+      </p>
+
     </div>
+
+
   </div>
+
 </body>
 </html>"""
 
 
-def _build_email_text(recipient_name: str, project_id: int, survey_link: str, personal_message: Optional[str]) -> str:
-    lines = [f"Dear {recipient_name},", "", f"Thank you for working with us on project #{project_id}.", ""]
+def _build_email_text(
+    recipient_name: str,
+    project_id: int,
+    survey_link: str,
+    personal_message: Optional[str],
+    token: str,
+) -> str:
+
+    lines = [
+        f"Dear {recipient_name},",
+        "",
+        f"Thank you for working with us on project #{project_id}.",
+        "",
+    ]
+
     if personal_message and personal_message.strip():
-        lines += [personal_message.strip(), ""]
-    lines += ["Submit your feedback here:", survey_link, "", "This link expires in 30 days.", "", "© 2026 CSAT Tool · Mindteck"]
+        lines += [
+            personal_message.strip(),
+            "",
+        ]
+
+    lines += [
+        "Your verification token:",
+        token,
+        "",
+        "Submit your feedback here:",
+        survey_link,
+        "",
+        "This link expires in 30 days.",
+        "",
+        "© 2026 CSAT Tool · Mindteck",
+    ]
+
     return "\n".join(lines)
 
 
@@ -516,54 +618,167 @@ def send_to_customer(
     db: Session = Depends(get_local_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
-    """Quality's final confirmation — this is the only place the customer is
-    actually emailed. Requires the PM to have already approved the draft."""
+    """Quality's final confirmation — send email to customer."""
+
     row = _get_request_row(request_id, db)
 
     if row.pm_approval_status != "approved":
-        raise HTTPException(status_code=400, detail="This request must be approved by the PM before it can be sent.")
-    if row.status != "draft":
-        raise HTTPException(status_code=400, detail="This request has already been sent.")
+        raise HTTPException(
+            status_code=400,
+            detail="This request must be approved by the PM before it can be sent."
+        )
 
-    token       = _create_survey_token(row.project_id, row.recipient_email)
-    survey_link = f"{settings.FRONTEND_URL}/survey/{token}"
-    now         = datetime.utcnow()
-    expires_at  = now + timedelta(seconds=TOKEN_EXPIRY_SECONDS)
-    cc_list     = [e.strip() for e in row.cc_emails.split(",")] if row.cc_emails else None
+    if row.status != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="This request has already been sent."
+        )
+
+    token = _create_survey_token(
+    row.project_id,
+    row.recipient_email
+    )
+
+
+    survey_link = (
+        f"{settings.FRONTEND_URL}/survey-access"
+        f"?email={row.recipient_email}"
+        f"&surveyToken={token}"
+    )
+    now = datetime.utcnow()
+
+    expires_at = now + timedelta(
+        seconds=TOKEN_EXPIRY_SECONDS
+    )
+
+    cc_list = (
+        [e.strip() for e in row.cc_emails.split(",")]
+        if row.cc_emails
+        else None
+    )
 
     email_sent = EmailSender.send_email(
         to=row.recipient_email,
         subject=f"[Feedback Request] Project #{row.project_id} — Please Share Your Experience",
-        body=_build_email_text(row.recipient_name, row.project_id, survey_link, row.message),
-        html_content=_build_email_html(row.recipient_name, row.project_id, survey_link, row.message),
+        body=_build_email_text(
+            row.recipient_name,
+            row.project_id,
+            survey_link,
+            row.message,
+            token
+        ),
+        html_content=_build_email_html(
+            row.recipient_name,
+            row.project_id,
+            survey_link,
+            row.message,
+            token
+        ),
         cc=cc_list,
     )
 
     if not email_sent:
         raise HTTPException(
             status_code=500,
-            detail="Failed to send feedback email — check SMTP configuration. The draft is unchanged; try again.",
+            detail="Failed to send feedback email."
         )
 
     db.execute(
         text("""
             UPDATE fact_feedback_request
-            SET token = :token, feedback_url = :url, expires_at = :expires_at,
-                request_sent_at = :sent_at, status = 'sent'
+            SET token = :token,
+                feedback_url = :url,
+                expires_at = :expires_at,
+                request_sent_at = :sent_at,
+                status = 'sent'
             WHERE id = :id
         """),
-        {"token": token, "url": survey_link, "expires_at": expires_at, "sent_at": now, "id": request_id},
+        {
+            "token": token,
+            "url": survey_link,
+            "expires_at": expires_at,
+            "sent_at": now,
+            "id": request_id,
+        },
     )
+
     db.commit()
 
     return {
-        "success":    True,
+        "success": True,
         "email_sent": True,
-        "sent_to":    row.recipient_email,
-        "message":    f"Feedback request email successfully sent to {row.recipient_email}",
+        "sent_to": row.recipient_email,
+        "message": "Feedback request email successfully sent."
     }
+    
+class VerifyTokenRequest(BaseModel):
+    email: str
+    token: str
 
 
+@router.post("/verify-token")
+def verify_survey_token(
+    payload: VerifyTokenRequest,
+    db: Session = Depends(get_local_db),
+):
+
+    print("========== TOKEN VERIFY DEBUG ==========")
+    print("Email received:", payload.email)
+    print("Token received:", payload.token)
+    print("========================================")
+
+    row = db.execute(
+        text("""
+            SELECT
+                token,
+                recipient_email,
+                expires_at,
+                status
+            FROM fact_feedback_request
+            WHERE token = :token
+            LIMIT 1
+        """),
+        {
+            "token": payload.token.strip()
+        },
+    ).fetchone()
+
+    if not row:
+        print("TOKEN NOT FOUND IN DATABASE")
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid email or token"
+        )
+
+    data = row._mapping
+
+    print("DB Email:", data["recipient_email"])
+    print("DB Token:", data["token"])
+
+    if data["recipient_email"].strip().lower() != payload.email.strip().lower():
+        print("EMAIL MISMATCH")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid email or token"
+        )
+
+    if data["status"] == "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Survey already submitted"
+        )
+
+    if data["expires_at"] and datetime.utcnow() > data["expires_at"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Token expired"
+        )
+
+    return {
+        "success": True,
+        "message": "Token verified successfully",
+        "token": data["token"]
+    }
 # ── Public survey endpoints (no auth) ──────────────────────────────────────────
 
 @router.get("/public/{token}")
