@@ -44,6 +44,7 @@ frontend/dist/
 # Ignore databases and dependencies
 node_modules/
 frontend/node_modules/
+node_modules/.vite/deps
 *.db
 *.sqlite3
 

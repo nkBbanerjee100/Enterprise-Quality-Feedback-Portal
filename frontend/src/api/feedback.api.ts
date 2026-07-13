@@ -71,3 +71,15 @@ export const feedbackApi = {
     return response.data;
   },
 };
+export const verifySurveyToken = async(data:{
+    email:string;
+    token:string;
+}) => {
+
+    const response = await api.post(
+        '/api/feedback/verify-token',
+        data
+    );
+
+    return response.data;
+};

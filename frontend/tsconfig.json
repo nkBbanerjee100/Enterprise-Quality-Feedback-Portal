@@ -14,7 +14,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-     "types": ["vite/client"],
+    "types": ["vite/client"],
 
     /* Linting */
     "strict": true,
@@ -24,9 +24,9 @@
     "forceConsistentCasingInFileNames": true,
 
     /* Path mapping */
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
+   /* Path mapping */
+  "paths": {
+  "@/*": ["./src/*"]
     }
   },
   "include": ["src"],
