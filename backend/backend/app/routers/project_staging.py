@@ -22,7 +22,7 @@ and still applies when adding MORE projects to an ALREADY-EXISTING cycle
 later. This one only ever involves Management, never a project's Manager
 (PM) — Managers have no role in the initial project-pool triage.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, date, timezone
@@ -43,6 +43,8 @@ from app.services.staging_notification_service import (
     notify_management_project_needs_review, notify_quality_of_decision, notify_pm_project_triaged,
 )
 from app.services.cycle_notification_service import notify_project_added_to_cycle
+from app.services.audit_service import log_action, get_client_ip
+from app.schemas.audit import AuditActions
 
 router = APIRouter()
 
@@ -384,6 +386,7 @@ def list_staging_pool(
 @router.post("/select")
 def select_projects(
     payload: SelectProjectsRequest,
+    request: Request,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
@@ -391,6 +394,7 @@ def select_projects(
     selected = []
     skipped = []
     warnings = []
+    triaged_this_call: list[tuple[int, str, str]] = []  # (staging_id, project_name, action)
     selected_by_name = current_user.get("name") or current_user["emp_id"]
 
     for item in payload.items:
@@ -443,6 +447,7 @@ def select_projects(
 
         db.flush()
         selected.append(item.tms_project_id)
+        triaged_this_call.append((staging_row.id, project.project_name, item.action.value))
 
         if item.action == TriageAction.NOT_SURE:
             try:
@@ -492,6 +497,17 @@ def select_projects(
                 })
 
     db.commit()
+
+    ip = get_client_ip(request)
+    for staging_id, project_name, action_taken in triaged_this_call:
+        log_action(
+            db, action=AuditActions.PROJECT_STAGING_TRIAGED,
+            actor_emp_id=current_user["emp_id"], actor_name=selected_by_name,
+            actor_role=current_user["role"], ip_address=ip,
+            entity_type="project_staging", entity_id=staging_id,
+            details={"project_name": project_name, "decision": action_taken},
+        )
+
     return {"selected": selected, "skipped": skipped, "warnings": warnings}
 
 
@@ -502,6 +518,7 @@ def select_projects(
 def decide_staged_project(
     staging_id: int,
     payload: ManagementStagingDecisionRequest,
+    request: Request,
     db: Session = Depends(get_local_db),
     current_user: dict = Depends(require_role("MANAGEMENT")),
 ):
@@ -519,6 +536,15 @@ def decide_staged_project(
     db.commit()
     db.refresh(staging_row)
     project = db.query(Project).filter(Project.id == staging_row.project_id).first()
+
+    log_action(
+        db,
+        action=AuditActions.CYCLE_ADDITION_APPROVED if payload.approve else AuditActions.CYCLE_ADDITION_DECLINED,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="project_staging", entity_id=staging_row.id,
+        details={"project_name": project.project_name if project else None, "remarks": payload.remarks, "via": "staging_review"},
+    )
 
     try:
         notify_quality_of_decision(
@@ -546,6 +572,7 @@ def decide_staged_project(
 @router.post("/create-cycle")
 def create_cycle_from_staging(
     payload: CreateCycleFromStagingRequest,
+    request: Request,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
@@ -585,6 +612,7 @@ def create_cycle_from_staging(
     now = datetime.utcnow()
     enrolled_count = 0
     needs_review_notify: list[tuple[CycleProjectEnrollment, Project]] = []
+    all_enrolled: list[tuple[CycleProjectEnrollment, Project]] = []
 
     for staging_row in eligible_rows + other_rows:
         project = db.query(Project).filter(Project.id == staging_row.project_id).first()
@@ -623,6 +651,8 @@ def create_cycle_from_staging(
         staging_row.converted_cycle_id = cycle.id
         staging_row.converted_at = now
         enrolled_count += 1
+        if project:
+            all_enrolled.append((enr, project))
 
         if addition_status == AdditionApprovalStatus.PENDING and project:
             needs_review_notify.append((enr, project))
@@ -651,5 +681,24 @@ def create_cycle_from_staging(
         except Exception as e:
             print(f"[WARN] Failed to notify for staged-carryover enrollment {enr.id}: {e}")
     db.commit()
+
+    ip = get_client_ip(request)
+    actor = current_user["emp_id"]
+    actor_name = current_user.get("name")
+    actor_role = current_user["role"]
+
+    log_action(
+        db, action=AuditActions.CSAT_CYCLE_CREATED,
+        actor_emp_id=actor, actor_name=actor_name, actor_role=actor_role, ip_address=ip,
+        entity_type="csat_cycle", entity_id=cycle.id,
+        details={"cycle_name": cycle.cycle_name, "year": payload.year, "half": payload.half, "via": "project_staging"},
+    )
+    for enr, project in all_enrolled:
+        log_action(
+            db, action=AuditActions.PROJECT_ENROLLED,
+            actor_emp_id=actor, actor_name=actor_name, actor_role=actor_role, ip_address=ip,
+            entity_type="cycle_project_enrollment", entity_id=enr.id,
+            details={"cycle_id": cycle.id, "project_name": project.project_name, "via": "project_staging"},
+        )
 
     return {**_cycle_resp(cycle), "projects_enrolled": enrolled_count}

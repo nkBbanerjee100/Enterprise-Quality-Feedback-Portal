@@ -1,10 +1,10 @@
 """Authentication Router — register / login / logout"""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
-from datetime import timedelta
+from datetime import datetime, timedelta
  
 from app.database import get_local_db
 from app.services.registration_service import (
@@ -16,12 +16,19 @@ from app.services.registration_service import (
 )
 from app.core.security import (
     verify_password,
+    hash_password,
     create_access_token,
     create_refresh_token,
     decode_token,
 )
 from app.core.dependencies import get_current_user, require_role
+from app.services.audit_service import log_action, get_client_ip
+from app.schemas.audit import AuditActions
+from app.schemas.password_reset import ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest
+from app.utils.email import EmailSender
 from app.config import settings
+import hashlib
+import random
  
 router = APIRouter()
  
@@ -328,6 +335,7 @@ async def register(
 )
 async def allow_user(
     payload: AllowUserRequest,
+    request: Request,
     local_db: Session = Depends(get_local_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
 ):
@@ -336,6 +344,13 @@ async def allow_user(
         role=payload.role,
         allowed_by=current_user["emp_id"],
         local_db=local_db,
+    )
+    log_action(
+        local_db, action=AuditActions.REGISTRATION_APPROVED,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="allowed_email", entity_id=result["Email"],
+        details={"email": result["Email"], "role": result["role"]},
     )
     return AllowUserResponse(
         message="Email allowed. They can now self-register with this role.",
@@ -454,6 +469,7 @@ async def activate(
 )
 async def login(
     payload: LoginRequest,
+    request: Request,
     local_db: Session = Depends(get_local_db),
 ):
     # 1. Fetch user by email
@@ -464,9 +480,15 @@ async def login(
         LIMIT 1
     """)
     row = local_db.execute(query, {"email": payload.email}).fetchone()
+    ip = get_client_ip(request)
  
     # 2. User not found
     if row is None:
+        log_action(
+            local_db, action=AuditActions.LOGIN_FAILED,
+            ip_address=ip, success=False,
+            details={"email": payload.email, "reason": "no_such_user"},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
@@ -474,6 +496,11 @@ async def login(
  
     # 3. Account was only invited by admin, not yet activated by the employee
     if not row.is_registered:
+        log_action(
+            local_db, action=AuditActions.LOGIN_FAILED,
+            actor_emp_id=row.EmpId, actor_name=row.EmpFirstName, actor_role=row.role,
+            ip_address=ip, success=False, details={"reason": "not_activated"},
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account hasn't been activated yet. Please complete activation first.",
@@ -481,6 +508,11 @@ async def login(
  
     # 4. Wrong password
     if not verify_password(payload.password, row.hashed_password):
+        log_action(
+            local_db, action=AuditActions.LOGIN_FAILED,
+            actor_emp_id=row.EmpId, actor_name=row.EmpFirstName, actor_role=row.role,
+            ip_address=ip, success=False, details={"reason": "wrong_password"},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
@@ -488,6 +520,11 @@ async def login(
  
     # 5. Account inactive
     if not row.is_active:
+        log_action(
+            local_db, action=AuditActions.LOGIN_FAILED,
+            actor_emp_id=row.EmpId, actor_name=row.EmpFirstName, actor_role=row.role,
+            ip_address=ip, success=False, details={"reason": "inactive_account"},
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account is inactive. Please contact the administrator.",
@@ -509,6 +546,12 @@ async def login(
         {"emp_id": row.EmpId},
     )
     local_db.commit()
+
+    log_action(
+        local_db, action=AuditActions.LOGIN_SUCCESS,
+        actor_emp_id=row.EmpId, actor_name=row.EmpFirstName, actor_role=row.role,
+        ip_address=ip,
+    )
  
     return LoginResponse(
         message="Login successful!",
@@ -537,9 +580,19 @@ async def login(
     3. Any subsequent request carrying this token will get 401 Unauthorized
     """,
 )
-async def logout():
+async def logout(
+    request: Request,
+    local_db: Session = Depends(get_local_db),
+    current_user: dict = Depends(get_current_user),
+):
     # 1. Decode to validate the token first
- 
+
+    log_action(
+        local_db, action=AuditActions.LOGOUT,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+    )
+
     return LogoutResponse(message="Logged out successfully. Have a great day!")
  
  
@@ -578,3 +631,211 @@ async def get_me(
         permissions=config["permissions"],
         defaultRoute=config["defaultRoute"],
     )
+
+
+# ============================================================
+# POST /api/auth/forgot-password
+# ============================================================
+@router.post("/forgot-password")
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    local_db: Session = Depends(get_local_db),
+):
+    """
+    Email a 6-digit OTP to the account's address.
+
+    NOTE: unlike the previous behavior, this endpoint now tells the caller
+    explicitly whether the email is registered, inactive, or unregistered,
+    rather than always returning the same generic message. This is a
+    deliberate product decision (internal tool, known user base) that trades
+    away the anti-email-enumeration protection a generic message would give,
+    in exchange for a clearer UX on the forgot-password screen.
+    """
+    ip = get_client_ip(request)
+
+    row = local_db.execute(
+        text("SELECT EmpId, EmpFirstName, role, is_active, is_registered FROM csat_users WHERE Email = :email LIMIT 1"),
+        {"email": payload.email},
+    ).fetchone()
+
+    if row is None:
+        log_action(
+            local_db, action=AuditActions.PASSWORD_RESET_REQUESTED,
+            ip_address=ip, success=False,
+            details={"email": payload.email, "reason": "no_such_account"},
+        )
+        raise HTTPException(status_code=404, detail="This email is not registered.")
+
+    if not row.is_active:
+        log_action(
+            local_db, action=AuditActions.PASSWORD_RESET_REQUESTED,
+            ip_address=ip, success=False,
+            details={"email": payload.email, "reason": "inactive"},
+        )
+        raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact admin.")
+
+    if not row.is_registered:
+        log_action(
+            local_db, action=AuditActions.PASSWORD_RESET_REQUESTED,
+            ip_address=ip, success=False,
+            details={"email": payload.email, "reason": "not_registered"},
+        )
+        raise HTTPException(status_code=403, detail="Please complete your registration before resetting your password.")
+
+    otp = f"{random.randint(0, 999999):06d}"
+    otp_hash = hashlib.sha256(otp.encode()).hexdigest()
+    expires_at = datetime.utcnow() + timedelta(minutes=10)
+
+    local_db.execute(
+        text("""
+            INSERT INTO password_reset_otps (email, otp_hash, expires_at, attempts, is_used, created_at)
+            VALUES (:email, :otp_hash, :expires_at, 0, 0, NOW())
+        """),
+        {"email": payload.email, "otp_hash": otp_hash, "expires_at": expires_at},
+    )
+    local_db.commit()
+
+    subject = "Your CSAT Tool password reset code"
+    body = f"Your verification code is {otp}. It expires in 10 minutes. If you didn't request this, you can safely ignore this email."
+    html = (
+        f"<p>Your verification code is <strong style='font-size:20px'>{otp}</strong>.</p>"
+        f"<p>It expires in 10 minutes. If you didn't request this, you can safely ignore this email.</p>"
+    )
+    try:
+        EmailSender.send_email(to=payload.email, subject=subject, body=body, html_content=html)
+    except Exception as e:
+        # Best-effort — the OTP row already exists, so a retry via the same
+        # endpoint (or the "resend" link) will just issue a fresh one.
+        print(f"[WARN] Failed to send password reset email to {payload.email}: {e}")
+
+    log_action(
+        local_db, action=AuditActions.PASSWORD_RESET_REQUESTED,
+        actor_emp_id=row.EmpId, actor_name=row.EmpFirstName, actor_role=row.role,
+        ip_address=ip,
+    )
+
+    return {"message": f"A verification code has been sent to {payload.email}."}
+
+
+# ============================================================
+# POST /api/auth/reset-password
+# ============================================================
+@router.post("/reset-password")
+async def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    local_db: Session = Depends(get_local_db),
+):
+    """Verify the OTP and set a new password. Max 5 wrong attempts per OTP
+    before it's permanently locked, forcing a fresh forgot-password request
+    rather than allowing unlimited guessing of a 6-digit code."""
+    ip = get_client_ip(request)
+
+    otp_row = local_db.execute(
+        text("""
+            SELECT id, otp_hash, expires_at, attempts, is_used
+            FROM password_reset_otps
+            WHERE email = :email
+            ORDER BY created_at DESC
+            LIMIT 1
+        """),
+        {"email": payload.email},
+    ).fetchone()
+
+    def _fail(reason: str, http_status: int = 400, detail: str = "Invalid or expired code."):
+        log_action(
+            local_db, action=AuditActions.PASSWORD_RESET_COMPLETED,
+            ip_address=ip, success=False,
+            details={"email": payload.email, "reason": reason},
+        )
+        raise HTTPException(status_code=http_status, detail=detail)
+
+    if otp_row is None:
+        _fail("no_otp_requested")
+    if otp_row.is_used:
+        _fail("otp_already_used")
+    if datetime.utcnow() > otp_row.expires_at:
+        _fail("otp_expired", detail="This code has expired. Please request a new one.")
+    if otp_row.attempts >= 5:
+        _fail("too_many_attempts", detail="Too many incorrect attempts. Please request a new code.")
+
+    otp_hash = hashlib.sha256(payload.otp.encode()).hexdigest()
+    if otp_hash != otp_row.otp_hash:
+        local_db.execute(
+            text("UPDATE password_reset_otps SET attempts = attempts + 1 WHERE id = :id"),
+            {"id": otp_row.id},
+        )
+        local_db.commit()
+        _fail("wrong_otp", detail="Incorrect code. Please try again.")
+
+    user_row = local_db.execute(
+        text("SELECT EmpId, EmpFirstName, role FROM csat_users WHERE Email = :email LIMIT 1"),
+        {"email": payload.email},
+    ).fetchone()
+    if user_row is None:
+        _fail("user_vanished", http_status=404, detail="Account not found.")
+
+    new_hash = hash_password(payload.new_password)
+    local_db.execute(
+        text("UPDATE csat_users SET hashed_password = :hash WHERE EmpId = :emp_id"),
+        {"hash": new_hash, "emp_id": user_row.EmpId},
+    )
+    local_db.execute(
+        text("UPDATE password_reset_otps SET is_used = 1 WHERE id = :id"),
+        {"id": otp_row.id},
+    )
+    local_db.commit()
+
+    log_action(
+        local_db, action=AuditActions.PASSWORD_RESET_COMPLETED,
+        actor_emp_id=user_row.EmpId, actor_name=user_row.EmpFirstName, actor_role=user_row.role,
+        ip_address=ip,
+    )
+
+    return {"message": "Password reset successful. You can now log in with your new password."}
+
+
+# ============================================================
+# POST /api/auth/change-password  (authenticated — Settings page)
+# ============================================================
+@router.post("/change-password")
+async def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    local_db: Session = Depends(get_local_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Authenticated password change from Settings — requires the current
+    password (unlike forgot-password, which uses an emailed OTP instead
+    since the user can't prove they know the current one there)."""
+    ip = get_client_ip(request)
+
+    row = local_db.execute(
+        text("SELECT hashed_password FROM csat_users WHERE EmpId = :emp_id LIMIT 1"),
+        {"emp_id": current_user["emp_id"]},
+    ).fetchone()
+
+    if row is None or not verify_password(payload.current_password, row.hashed_password):
+        log_action(
+            local_db, action=AuditActions.PASSWORD_CHANGED,
+            actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+            actor_role=current_user["role"], ip_address=ip, success=False,
+            details={"reason": "wrong_current_password"},
+        )
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+
+    new_hash = hash_password(payload.new_password)
+    local_db.execute(
+        text("UPDATE csat_users SET hashed_password = :hash WHERE EmpId = :emp_id"),
+        {"hash": new_hash, "emp_id": current_user["emp_id"]},
+    )
+    local_db.commit()
+
+    log_action(
+        local_db, action=AuditActions.PASSWORD_CHANGED,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=ip,
+    )
+
+    return {"message": "Password changed successfully."}

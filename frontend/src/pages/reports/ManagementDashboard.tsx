@@ -16,7 +16,7 @@ import { useAuthStore } from '../../store/auth.store';
 import { useDashboard } from '../../hooks/useDashboard';
 import { csatCyclesApi } from '../../api/csat-cycles.api';
 import { EnrolledProject, EligibilityStatus } from '../../types/csat-cycle.types';
-import { ROUTES, BRAND } from '../../utils/constants';
+import { BRAND } from '../../utils/constants';
 
 // ─── KPI card (no trend sparkline — per this pass) ────────────────────────────
 const KpiCard: React.FC<{
@@ -60,6 +60,24 @@ function StatusPill({ status }: { status: EligibilityStatus }) {
   );
 }
 
+// Completion (has the project itself finished, per its TMS EndDate) and
+// eligibility (is it in-scope for CSAT feedback this cycle) are two
+// separate things. Every row in the "Completed Projects" table already IS
+// completed — that's the filter used to fetch it — so it always needs a
+// plain "Completed" badge here, never the eligibility pill above (which
+// would just show whatever eligibility_status happens to be, e.g.
+// "Eligible", and confusingly imply the project were still ongoing).
+function CompletedPill() {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', padding: '4px 12px',
+      borderRadius: 20, fontSize: 12, fontWeight: 600, background: '#F3F4F6', color: '#6B7280',
+    }}>
+      Completed
+    </span>
+  );
+}
+
 // ─── Row-avatar (initials-free placeholder icon, matches the screenshot) ──────
 function ProjectAvatar() {
   return (
@@ -84,6 +102,7 @@ export const ManagementDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const [search, setSearch] = useState('');
+  const [eligibleFilter, setEligibleFilter] = useState<'active' | 'completed'>('active');
 
   const { data: dashData } = useDashboard();
 
@@ -116,15 +135,18 @@ export const ManagementDashboard: React.FC = () => {
   // "Eligible Projects" — projects in the current cycle whose eligibility_status
   // is 'eligible' or 'approved' (the latter covers projects that went through a
   // not-sure → manager-approval escalation and came back eligible). We use the
-  // eligibility filter (`status: 'eligible'`), NOT `project_status`, because
-  // `project_status` reflects a TMS-synced `is_active` flag that's only ever
-  // refreshed once, at enrollment time — it goes stale as soon as a project's
-  // real-world status changes afterward and there's no scheduled resync. The
-  // eligibility_status field, by contrast, is maintained directly in our own
-  // CSAT workflow, so it's always current.
+  // eligibility filter (`status: 'eligible'`), NOT project completion, to decide
+  // WHICH projects belong in this list at all.
+  //
+  // Within that list, `eligibleFilter` (active/completed) further splits it by
+  // whether the project itself is still in progress or has already finished —
+  // purely by comparing TMS EndDate to today (see _get_tms_live_completion_bulk
+  // on the backend): active = EndDate is in the future (or unset), completed =
+  // EndDate has passed. TMS's own IsProjectActive flag is not used for this at
+  // all, since it isn't kept reliably in sync with reality on the TMS side.
   const { data: eligibleData, isLoading: eligibleLoading } = useQuery({
-    queryKey: ['dashboardEligibleProjects', cycleId],
-    queryFn: () => csatCyclesApi.listProjects(cycleId!, { status: 'eligible', project_status: 'all', limit: 3, active_first: false }),
+    queryKey: ['dashboardEligibleProjects', cycleId, eligibleFilter],
+    queryFn: () => csatCyclesApi.listProjects(cycleId!, { status: 'eligible', project_status: eligibleFilter, limit: 100, active_first: false }),
     enabled: !!cycleId,
   });
 
@@ -196,8 +218,8 @@ export const ManagementDashboard: React.FC = () => {
         {/* KPI row */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
           <KpiCard
-            label="Eligible Projects" value={eligibleLoading ? '—' : eligibleTotal}
-            sub={eligibleTotal > 0 ? `${eligibleTotal} ready in this cycle` : undefined}
+            label="Eligible Projects" value={eligibleLoading ? '—' : (readyCount ?? eligibleTotal)}
+            sub={readyCount ? `${readyCount} ready in this cycle` : undefined}
             accent="#1A5C3A" icon="✅"
           />
           <KpiCard
@@ -229,61 +251,88 @@ export const ManagementDashboard: React.FC = () => {
                 {eligibleTotal}
               </span>
             </div>
-            {cycleId && (
-              <button
-                onClick={() => navigate(`/csat-cycles/${cycleId}?filter=ready&from=reports`)}
-                style={{ fontSize: 13, fontWeight: 600, color: BRAND.textMid, background: '#F3F4F6', border: 'none', borderRadius: 8, padding: '7px 14px', cursor: 'pointer' }}
-              >
-                View all
-              </button>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', background: '#F3F4F6', borderRadius: 8, padding: 3 }}>
+                {(['active', 'completed'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setEligibleFilter(f)}
+                    style={{
+                      fontSize: 12.5, fontWeight: 600, padding: '6px 14px', borderRadius: 6,
+                      border: 'none', cursor: 'pointer',
+                      background: eligibleFilter === f ? '#fff' : 'transparent',
+                      color: eligibleFilter === f ? BRAND.textDark : BRAND.textLight,
+                      boxShadow: eligibleFilter === f ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+                    }}
+                  >
+                    {f === 'active' ? 'Active' : 'Completed'}
+                  </button>
+                ))}
+              </div>
+              {cycleId && (
+                <button
+                  onClick={() => navigate(`/csat-cycles/${cycleId}?filter=ready&from=reports`)}
+                  style={{ fontSize: 13, fontWeight: 600, color: BRAND.textMid, background: '#F3F4F6', border: 'none', borderRadius: 8, padding: '7px 14px', cursor: 'pointer' }}
+                >
+                  View all
+                </button>
+              )}
+            </div>
           </div>
 
           <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #F1F3F4' }}>
-                  {['Project', 'Project Manager', 'Status', ''].map(h => (
-                    <th key={h} style={{ padding: '12px 20px', fontSize: 11, fontWeight: 600, color: BRAND.textLight, textAlign: h === '' ? 'right' : 'left', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {eligibleLoading ? (
-                  <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>Loading…</td></tr>
-                ) : eligibleProjects.length === 0 ? (
-                  <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>No eligible projects in this cycle yet.</td></tr>
-                ) : eligibleProjects.map((p: EnrolledProject, i) => (
-                  <tr key={p.enrollment_id} style={{ borderLeft: i === 0 ? `3px solid ${BRAND.green}` : '3px solid transparent', borderBottom: '1px solid #F6F7F8' }}>
-                    <td style={{ padding: '14px 20px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <ProjectAvatar />
-                        <div>
-                          <p style={{ fontSize: 13.5, fontWeight: 600, color: BRAND.textDark, margin: 0 }}>{p.project_name}</p>
-                          <p style={{ fontSize: 11.5, color: BRAND.textLight, margin: '2px 0 0' }}>Added on {fmtDate(p.enrolled_at)}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '14px 20px', fontSize: 13, color: BRAND.textMid }}>
-                      {p.project_manager_name ?? '—'}
-                    </td>
-                    <td style={{ padding: '14px 20px' }}>
-                      <StatusPill status={p.eligibility_status} />
-                    </td>
-                    <td style={{ padding: '14px 20px', textAlign: 'right' }}>
-                      <button
-                        onClick={() => navigate(`/projects/${p.project_ext_id}`)}
-                        style={{ fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}
-                      >
-                        Details
-                      </button>
-                    </td>
+            <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #F1F3F4' }}>
+                    {['Project', 'Project Manager', 'Status', ''].map(h => (
+                      <th key={h} style={{
+                        padding: '12px 20px', fontSize: 11, fontWeight: 600, color: BRAND.textLight,
+                        textAlign: h === '' ? 'right' : 'left', letterSpacing: '0.04em', textTransform: 'uppercase',
+                        position: 'sticky', top: 0, background: '#fff', zIndex: 1,
+                      }}>
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {eligibleLoading ? (
+                    <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>Loading…</td></tr>
+                  ) : eligibleProjects.length === 0 ? (
+                    <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: BRAND.textLight, fontSize: 13 }}>
+                      No {eligibleFilter} eligible projects in this cycle{eligibleFilter === 'completed' ? ' yet' : ''}.
+                    </td></tr>
+                  ) : eligibleProjects.map((p: EnrolledProject, i) => (
+                    <tr key={p.enrollment_id} style={{ borderLeft: i === 0 ? `3px solid ${BRAND.green}` : '3px solid transparent', borderBottom: '1px solid #F6F7F8' }}>
+                      <td style={{ padding: '14px 20px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <ProjectAvatar />
+                          <div>
+                            <p style={{ fontSize: 13.5, fontWeight: 600, color: BRAND.textDark, margin: 0 }}>{p.project_name}</p>
+                            <p style={{ fontSize: 11.5, color: BRAND.textLight, margin: '2px 0 0' }}>Added on {fmtDate(p.enrolled_at)}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '14px 20px', fontSize: 13, color: BRAND.textMid }}>
+                        {p.project_manager_name ?? '—'}
+                      </td>
+                      <td style={{ padding: '14px 20px' }}>
+                        <StatusPill status={p.eligibility_status} />
+                      </td>
+                      <td style={{ padding: '14px 20px', textAlign: 'right' }}>
+                        <button
+                          onClick={() => navigate(`/projects/${p.project_ext_id}`)}
+                          style={{ fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}
+                        >
+                          Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -340,11 +389,11 @@ export const ManagementDashboard: React.FC = () => {
                       {fmtDate(p.enrolled_at)}
                     </td>
                     <td style={{ padding: '14px 20px' }}>
-                      <StatusPill status={p.eligibility_status} />
+                      <CompletedPill />
                     </td>
                     <td style={{ padding: '14px 20px', textAlign: 'right' }}>
                       <button
-                        onClick={() => navigate(ROUTES.REPORTS)}
+                        onClick={() => navigate(`/projects/${p.project_ext_id}`)}
                         style={{ fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}
                       >
                         View Report

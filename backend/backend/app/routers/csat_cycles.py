@@ -1,7 +1,7 @@
 """CSAT Cycle routes — full implementation"""
 from datetime import datetime, date
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,8 @@ from app.schemas.csat_cycle import (
 from app.services.cycle_notification_service import (
     notify_project_added_to_cycle, get_project_manager, get_project_managers_bulk,
 )
+from app.services.audit_service import log_action, get_client_ip
+from app.schemas.audit import AuditActions
 
 router = APIRouter()
 
@@ -31,6 +33,46 @@ def _safe_int(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _get_tms_live_completion_bulk(tms_project_ids: List[int], tms_db: Session) -> dict:
+    """
+    dim_projects.is_active is only ever written ONCE — at the moment a
+    project is staged or enrolled (see project_staging.py / enroll_projects
+    below), as a snapshot of TMS's IsProjectActive at that instant. There is
+    no background job that refreshes it afterward, so a project enrolled
+    long ago can sit permanently flagged "active" locally even after it
+    genuinely completes in TMS.
+
+    TMS's own IsProjectActive flag is not used here either — it isn't kept
+    reliably in sync with reality on the TMS side. A project is judged
+    completed purely by comparing its EndDate against today's date:
+    completed if EndDate is set and is in the past. A project with no
+    EndDate, or one still in the future, counts as active.
+
+    Returns {tms_project_id: is_completed_bool}. Projects not found in TMS
+    (deleted, or ID mismatch) are left out of the dict — caller should treat
+    missing entries by falling back to the local snapshot.
+    """
+    if not tms_project_ids:
+        return {}
+    rows = tms_db.execute(
+        text("""
+            SELECT Id, EndDate
+            FROM tsms_projects
+            WHERE Id IN :ids
+        """).bindparams(ids=tuple(tms_project_ids)),
+    ).fetchall() if len(tms_project_ids) > 1 else tms_db.execute(
+        text("SELECT Id, EndDate FROM tsms_projects WHERE Id = :id"),
+        {"id": tms_project_ids[0]},
+    ).fetchall()
+
+    result = {}
+    today = datetime.utcnow().date()
+    for r in rows:
+        end_date = r.EndDate.date() if hasattr(r.EndDate, "date") else r.EndDate
+        result[r.Id] = bool(end_date) and end_date < today
+    return result
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -157,6 +199,7 @@ def list_csat_cycles(
 @router.post("/", response_model=CSATCycleResponse, status_code=status.HTTP_201_CREATED)
 def create_csat_cycle(
     payload: CSATCycleCreate,
+    request: Request,
     db: Session = Depends(get_local_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
@@ -174,6 +217,14 @@ def create_csat_cycle(
     db.add(cycle)
     db.commit()
     db.refresh(cycle)
+
+    log_action(
+        db, action=AuditActions.CSAT_CYCLE_CREATED,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="csat_cycle", entity_id=cycle.id,
+        details={"cycle_name": cycle.cycle_name, "year": payload.year, "half": payload.half},
+    )
     return _cycle_resp(cycle)
 
 
@@ -254,13 +305,15 @@ def list_cycle_projects(
         .filter(CycleProjectEnrollment.cycle_id == cycle_id)
     )
 
-    # Project active/completed filter — default shows active
+    # Project active/completed filter — NOTE: this can no longer be pushed
+    # into SQL against Project.is_active. That column is only ever written
+    # once, at enroll/staging time (a one-time TMS snapshot), and never
+    # refreshed afterward — so filtering on it here would make "completed"
+    # permanently under-count anything enrolled before it actually finished
+    # in TMS. Instead we fetch matching rows first and apply a LIVE TMS
+    # check in Python (see _get_tms_live_completion_bulk), same as the PM
+    # filter below already has to do for MANAGER-role visibility.
     p_status = (project_status or "active").lower()
-    if p_status == "active":
-        base_q = base_q.filter(Project.is_active == True)
-    elif p_status == "completed":
-        base_q = base_q.filter(Project.is_active == False)
-    # 'all' → no filter
 
     # Eligibility status filter
     # 'eligible' includes manager-approved rows. It also excludes projects
@@ -294,11 +347,30 @@ def list_cycle_projects(
         tms_ids = [i for i in {_safe_int(proj.project_id) for _, proj in rows} if i is not None]
         return get_project_managers_bulk(tms_ids, tms_db)
 
+    def _apply_live_status_filter(rows):
+        """rows: list of (enr, proj) tuples. Returns the subset matching
+        p_status ('active' | 'completed' | 'all'), using a live TMS check
+        with a fallback to the local snapshot for any project TMS lookup
+        misses (e.g. deleted from TMS)."""
+        if p_status == "all":
+            return rows
+        tms_ids = [i for i in {_safe_int(proj.project_id) for _, proj in rows} if i is not None]
+        live_map = _get_tms_live_completion_bulk(tms_ids, tms_db)
+        out = []
+        for enr, proj in rows:
+            tid = _safe_int(proj.project_id)
+            is_completed = live_map.get(tid, not proj.is_active)  # fallback: old snapshot
+            if p_status == "completed" and is_completed:
+                out.append((enr, proj))
+            elif p_status == "active" and not is_completed:
+                out.append((enr, proj))
+        return out
+
     if is_manager_role:
         # PM filtering can't be pushed into the SQL query (PM lives in a
         # separate TMS database), so fetch all matching rows first, filter
         # by PM in Python, then paginate the filtered set.
-        all_matching = base_q.all()
+        all_matching = _apply_live_status_filter(base_q.all())
         pm_map = _pm_map_for(all_matching)
         filtered = [
             (enr, proj) for enr, proj in all_matching
@@ -324,8 +396,12 @@ def list_cycle_projects(
             if unfiltered_pm_map.get(_safe_int(proj.project_id), {}).get("emp_id") == my_emp_id
         ]
     else:
-        total = base_q.count()
-        page_rows = base_q.offset(skip).limit(limit).all()
+        # Live-status filtering can't be pushed into SQL either (TMS is a
+        # separate database) — same fetch-all-then-filter-then-paginate
+        # approach as the MANAGER branch above.
+        all_matching = _apply_live_status_filter(base_q.all())
+        total = len(all_matching)
+        page_rows = all_matching[skip: skip + limit]
         pm_map = _pm_map_for(page_rows)
         data = [
             _enrollment_to_response(enr, proj, pm_map.get(_safe_int(proj.project_id)), current_user)
@@ -368,6 +444,7 @@ def list_cycle_projects(
 def enroll_projects(
     cycle_id: int,
     payload: EnrollProjectsRequest,
+    request: Request,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
@@ -473,6 +550,16 @@ def enroll_projects(
             print(f"[WARN] Failed to send addition notifications for enrollment {enr.id}: {e}")
     db.commit()
 
+    ip = get_client_ip(request)
+    for enr, project in newly_enrolled:
+        log_action(
+            db, action=AuditActions.PROJECT_ENROLLED,
+            actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+            actor_role=current_user["role"], ip_address=ip,
+            entity_type="cycle_project_enrollment", entity_id=enr.id,
+            details={"cycle_id": cycle_id, "project_name": project.project_name},
+        )
+
     return {"enrolled": enrolled, "skipped": skipped}
 
 
@@ -481,6 +568,7 @@ def set_project_eligibility(
     cycle_id: int,
     enrollment_id: int,
     payload: SetEligibilityRequest,
+    request: Request,
     db: Session = Depends(get_local_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGER" , "MANAGEMENT")),
 ):
@@ -522,6 +610,17 @@ def set_project_eligibility(
     db.commit()
     db.refresh(enr)
     project = db.query(Project).filter(Project.id == enr.project_id).first()
+
+    log_action(
+        db, action=AuditActions.CYCLE_ELIGIBILITY_CHANGED,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="cycle_project_enrollment", entity_id=enr.id,
+        details={
+            "cycle_id": cycle_id, "project_name": project.project_name if project else None,
+            "new_status": payload.eligibility_status, "reason": payload.exemption_reason,
+        },
+    )
     return _enrollment_to_response(enr, project)
 
 
@@ -569,6 +668,7 @@ def _assert_can_decide_addition(project: Project, current_user: dict, tms_db: Se
 def approve_addition(
     cycle_id: int,
     enrollment_id: int,
+    request: Request,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
@@ -588,6 +688,14 @@ def approve_addition(
     db.commit()
     db.refresh(enr)
 
+    log_action(
+        db, action=AuditActions.CYCLE_ADDITION_APPROVED,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="cycle_project_enrollment", entity_id=enr.id,
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None},
+    )
+
     pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
     return _enrollment_to_response(enr, project, pm_info, current_user)
 
@@ -597,6 +705,7 @@ def decline_addition(
     cycle_id: int,
     enrollment_id: int,
     payload: DeclineAdditionRequest,
+    request: Request,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
@@ -633,5 +742,13 @@ def decline_addition(
 
     db.commit()
     db.refresh(enr)
+
+    log_action(
+        db, action=AuditActions.CYCLE_ADDITION_DECLINED,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="cycle_project_enrollment", entity_id=enr.id,
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks},
+    )
 
     return _enrollment_to_response(enr, project, pm_info, current_user)

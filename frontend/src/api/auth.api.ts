@@ -58,7 +58,7 @@ export const authApi = {
         email:        me.user.email,
         displayName:  me.user.displayName ?? `${me.user.first_name ?? ''} ${me.user.last_name ?? ''}`.trim(),
         role:         me.role,
-        emp_id:       me.user.emp_id     ?? '',
+        emp_id:       me.user.emp_id     ?? me.user.id ?? '',
         first_name:   me.user.first_name ?? me.user.displayName?.split(' ')[0] ?? '',
         last_name:    me.user.last_name  ?? me.user.displayName?.split(' ').slice(1).join(' ') ?? '',
         is_active:    me.user.is_active  ?? true,
@@ -74,7 +74,7 @@ export const authApi = {
       email:        flat.email       ?? '',
       displayName:  flat.displayName ?? `${flat.first_name ?? ''} ${flat.last_name ?? ''}`.trim(),
       role:         flat.role,
-      emp_id:       flat.emp_id      ?? '',
+      emp_id:       flat.emp_id      ?? flat.id ?? '',
       first_name:   flat.first_name  ?? '',
       last_name:    flat.last_name   ?? '',
       is_active:    flat.is_active   ?? true,
@@ -85,6 +85,25 @@ export const authApi = {
 
   register: async (payload: RegisterPayload): Promise<any> => {
     const response = await api.post('/api/auth/register', payload);
+    return response.data;
+  },
+
+  forgotPassword: async (email: string): Promise<{ message: string }> => {
+    const response = await api.post('/api/auth/forgot-password', { email });
+    return response.data;
+  },
+
+  resetPassword: async (payload: {
+    email: string; otp: string; new_password: string; confirm_password: string;
+  }): Promise<{ message: string }> => {
+    const response = await api.post('/api/auth/reset-password', payload);
+    return response.data;
+  },
+
+  changePassword: async (payload: {
+    current_password: string; new_password: string; confirm_password: string;
+  }): Promise<{ message: string }> => {
+    const response = await api.post('/api/auth/change-password', payload);
     return response.data;
   },
 };

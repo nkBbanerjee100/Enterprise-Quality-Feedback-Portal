@@ -10,9 +10,16 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
 import { ROUTES } from '../../utils/constants';
-import logo from '../../assets/mindteckLogo.png';
 import { BRAND } from '../../utils/constants';
 import { reviewsApi } from '../../api/reviews.api';
+
+// Same transparent white-on-green wordmark already used on the customer
+// survey header (CustomerSurveyPage.tsx) — the old local mindteckLogo.png
+// has a white background baked into the file, which reads as an odd boxed
+// square floating on the green sidebar. This version has no background,
+// so it sits directly on the sidebar green the way the survey header does.
+const MINDTECK_LOGO_WHITE =
+  'https://www.mindteck.com/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Flogo-white.478f1e2d.png&w=640&q=75';
 
 
 interface NavItem {
@@ -55,6 +62,7 @@ const NAV_ITEMS: NavItem[] = [
     icon:  '⚑',
     roles: [UserRole.MANAGEMENT],
   },
+
   {
     label: 'Reports',
     path:  ROUTES.REPORTS,
@@ -63,16 +71,10 @@ const NAV_ITEMS: NavItem[] = [
   },
   
   {
-    label: 'Audit Logs',
-    path:  ROUTES.ADMIN_AUDIT_LOGS,
-    icon:  '☰',
-    roles: [UserRole.QUALITY ],
-  },
-  {
-    label: 'Allow User',
-    path:  '/allow-user',
-    icon:  '✓',
-    roles: [UserRole.QUALITY, UserRole.MANAGEMENT],
+    label: 'Settings',
+    path:  ROUTES.SETTINGS,
+    icon:  '⚙',
+    roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
   },
 ];
 
@@ -125,30 +127,28 @@ export const Sidebar: React.FC = () => {
       {/* ── Logo area ── */}
       <div
         style={{
-          padding: '20px 16px 16px',
+          padding: '28px 20px 22px',
           borderBottom: '1px solid rgba(255,255,255,0.12)',
         }}
       >
-        {/* White frosted card holding the logo — matches the SS */}
-       <img
-  src={logo}
-  alt="Mindteck"
-  style={{
-    height: '72px',
-    width: 'auto',
-    objectFit: 'contain',
-    display: 'block',
-  }}
-/>
-
+        <img
+          src={MINDTECK_LOGO_WHITE}
+          alt="Mindteck"
+          style={{
+            height: '30px',
+            width: 'auto',
+            objectFit: 'contain',
+            display: 'block',
+          }}
+        />
         <p
           style={{
-            color: 'rgba(255,255,255,0.50)',
-            fontSize: '10px',
-            marginTop: '10px',
-            letterSpacing: '0.10em',
+            color: 'rgba(255,255,255,0.55)',
+            fontSize: '10.5px',
+            marginTop: '14px',
+            letterSpacing: '0.12em',
             textTransform: 'uppercase',
-            fontWeight: 500,
+            fontWeight: 600,
           }}
         >
           Quality Feedback Platform

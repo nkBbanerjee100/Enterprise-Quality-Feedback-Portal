@@ -26,6 +26,9 @@ import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
+from app.services.audit_service import log_action, get_client_ip
+from app.schemas.audit import AuditActions
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.orm import Session
@@ -615,7 +618,9 @@ def pm_reject(
 @router.post("/requests/{request_id}/send-to-customer")
 def send_to_customer(
     request_id: int,
+    request: Request,
     db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
     """Quality's final confirmation — send email to customer."""
@@ -703,6 +708,14 @@ def send_to_customer(
     )
 
     db.commit()
+
+    log_action(
+        db, action=AuditActions.FEEDBACK_SENT,
+        actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="feedback_request", entity_id=request_id,
+        details={"project_id": row.project_id, "project_name": _project_name(row.project_id, tms_db), "sent_to": row.recipient_email},
+    )
 
     return {
         "success": True,
