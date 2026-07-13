@@ -87,4 +87,23 @@ export const authApi = {
     const response = await api.post('/api/auth/register', payload);
     return response.data;
   },
+
+  forgotPassword: async (email: string): Promise<{ message: string }> => {
+    const response = await api.post('/api/auth/forgot-password', { email });
+    return response.data;
+  },
+
+  resetPassword: async (payload: {
+    email: string; otp: string; new_password: string; confirm_password: string;
+  }): Promise<{ message: string }> => {
+    const response = await api.post('/api/auth/reset-password', payload);
+    return response.data;
+  },
+
+  changePassword: async (payload: {
+    current_password: string; new_password: string; confirm_password: string;
+  }): Promise<{ message: string }> => {
+    const response = await api.post('/api/auth/change-password', payload);
+    return response.data;
+  },
 };

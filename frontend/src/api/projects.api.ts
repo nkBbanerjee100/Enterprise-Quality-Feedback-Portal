@@ -14,8 +14,9 @@ export const projectsApi = {
     isActive?: boolean,
     pm?:       string,
     year?:     number,
+    includeCount = true,
   ): Promise<TMSProjectListResponse> => {
-    const params: Record<string, unknown> = { skip, limit };
+    const params: Record<string, unknown> = { skip, limit, include_count: includeCount };
     if (search   !== undefined && search !== '') params.search    = search;
     if (isActive !== undefined)                  params.is_active = isActive;
     if (pm       !== undefined && pm !== '')      params.pm        = pm;
@@ -29,13 +30,9 @@ export const projectsApi = {
     skip   = 0,
     limit  = 20,
     search?: string,
-    pm?:     string,
-    year?:   number,
   ): Promise<TMSProjectListResponse> => {
     const params: Record<string, unknown> = { skip, limit };
     if (search) params.search = search;
-    if (pm)     params.pm     = pm;
-    if (year !== undefined) params.year = year;
     const res = await api.get('/api/tms/projects/completed', { params });
     return res.data;
   },

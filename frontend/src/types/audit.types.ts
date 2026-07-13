@@ -47,7 +47,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   REGISTRATION_APPROVED: 'Registration Approved',
   REGISTRATION_REJECTED: 'Registration Rejected',
   CSAT_CYCLE_CREATED: 'CSAT Cycle Created',
-  PROJECT_ENROLLED: 'Project Added to Cycle',
+  PROJECT_ENROLLED: 'Project Added to Cycle - Sent for review',
   CYCLE_ELIGIBILITY_CHANGED: 'Eligibility Changed',
   CYCLE_ADDITION_APPROVED: 'Project Addition Approved',
   CYCLE_ADDITION_DECLINED: 'Project Addition Declined',

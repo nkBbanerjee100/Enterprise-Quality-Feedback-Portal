@@ -54,6 +54,46 @@ const Field: React.FC<FieldProps> = ({ label, error, children }) => (
 const inputCls = (err?: string) =>
   `h-11 w-full rounded-[10px] border-[1.5px] px-3.5 text-sm text-[#1A1A1A] outline-none transition focus:border-[#1A5C3A] focus:shadow-[0_0_0_3px_rgba(26,92,58,0.12)] ${err ? 'border-red-400' : 'border-[#D6D6D6]'}`;
 
+// Routine, expected outcome — not an alert. Neutral treatment, same
+// reasoning as Audit Logs: color is reserved for genuine problems, not
+// for confirming that something worked as intended.
+function SuccessBanner({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-5 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700 flex items-center gap-2">
+      <span className="text-gray-400">✓</span>
+      {children}
+    </div>
+  );
+}
+
+// A real failure — this is the one state in this form actually worth
+// flagging visually, so it keeps color, same as failed logins in Audit Logs.
+function ErrorBanner({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-5 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+      {children}
+    </div>
+  );
+}
+
+// Two normal states of a routine workflow, not two different "moods" —
+// same neutral pill used everywhere else, differentiated by weight/border
+// rather than color, since neither state is a problem.
+function StatusBadge({ isUsed }: { isUsed: boolean }) {
+  if (isUsed) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
+        Registered
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full border border-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-500">
+      Pending
+    </span>
+  );
+}
+
 export const AllowUserContent: React.FC = () => {
   const [form, setForm] = useState<AllowData>({ email: '', role: 'QUALITY' });
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -63,12 +103,15 @@ export const AllowUserContent: React.FC = () => {
 
   const [rows, setRows] = useState<AllowedUserRow[]>([]);
   const [rowsLoading, setRowsLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 8;
 
   const loadRows = async () => {
     setRowsLoading(true);
     try {
       const data = await fetchAllowedUsers();
       setRows(data);
+      setPage(1);
     } catch {
       // non-fatal — table just stays empty
     } finally {
@@ -120,16 +163,8 @@ export const AllowUserContent: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8">
-        {apiMessage && (
-          <div className="mb-5 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">
-            {apiMessage}
-          </div>
-        )}
-        {apiError && (
-          <div className="mb-5 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            {apiError}
-          </div>
-        )}
+        {apiMessage && <SuccessBanner>{apiMessage}</SuccessBanner>}
+        {apiError && <ErrorBanner>{apiError}</ErrorBanner>}
 
         <div className="grid grid-cols-2 gap-4">
           <Field label="Work Email *" error={errors.email}>
@@ -164,40 +199,64 @@ export const AllowUserContent: React.FC = () => {
 
       {/* Allow-listed emails table */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-        <h2 className="text-base font-semibold text-gray-800 mb-4">Allow-listed Emails</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-gray-800">Allow-listed Emails</h2>
+          {rows.length > 0 && (
+            <span className="text-xs text-gray-400">{rows.length} total</span>
+          )}
+        </div>
         {rowsLoading ? (
           <p className="text-sm text-gray-400">Loading...</p>
         ) : rows.length === 0 ? (
           <p className="text-sm text-gray-400">No emails allowed yet.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase text-gray-400 border-b border-gray-100">
-                <th className="py-2 pr-4">Email</th>
-                <th className="py-2 pr-4">Role</th>
-                <th className="py-2 pr-4">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(row => (
-                <tr key={row.Email} className="border-b border-gray-50">
-                  <td className="py-2 pr-4 text-gray-700">{row.Email}</td>
-                  <td className="py-2 pr-4 text-gray-700">{row.role}</td>
-                  <td className="py-2 pr-4">
-                    {row.is_used ? (
-                      <span className="inline-flex items-center rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                        Registered
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
-                        Pending
-                      </span>
-                    )}
-                  </td>
+          <>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase text-gray-400 border-b border-gray-100">
+                  <th className="py-2 pr-4">Email</th>
+                  <th className="py-2 pr-4">Role</th>
+                  <th className="py-2 pr-4">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(row => (
+                  <tr key={row.Email} className="border-b border-gray-50">
+                    <td className="py-2 pr-4 text-gray-700">{row.Email}</td>
+                    <td className="py-2 pr-4 text-gray-700">{row.role}</td>
+                    <td className="py-2 pr-4">
+                      <StatusBadge isUsed={row.is_used} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {rows.length > PAGE_SIZE && (
+              <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-100 text-sm text-gray-500">
+                <span>
+                  Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, rows.length)} of {rows.length}
+                </span>
+                <div className="flex items-center gap-3">
+                  <button
+                    disabled={page === 1}
+                    onClick={() => setPage(p => p - 1)}
+                    className="px-3 py-1.5 rounded-lg border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
+                  >
+                    Previous
+                  </button>
+                  <span>Page {page} of {Math.ceil(rows.length / PAGE_SIZE)}</span>
+                  <button
+                    disabled={page * PAGE_SIZE >= rows.length}
+                    onClick={() => setPage(p => p + 1)}
+                    className="px-3 py-1.5 rounded-lg border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

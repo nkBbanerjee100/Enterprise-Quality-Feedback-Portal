@@ -17,33 +17,65 @@ import { auditApi } from '../../api/audit.api';
 import { AUDIT_ACTION_LABELS, AuditLogEntry } from '../../types/audit.types';
 import { BRAND } from '../../utils/constants';
 
-const ROLE_COLORS: Record<string, { bg: string; text: string }> = {
-  QUALITY:    { bg: '#E7F6EC', text: '#1A5C3A' },
-  MANAGEMENT: { bg: '#FDF3E3', text: '#9B7C2A' },
-  MANAGER:    { bg: '#EFF4FF', text: '#2563EB' },
-  DELIVERY:   { bg: '#F3E8FF', text: '#7C3AED' },
-  SALES:      { bg: '#FEF2F2', text: '#B91C1C' },
-  CUSTOMER:   { bg: '#F3F4F6', text: '#6B7280' },
-};
-
+// Role is identity, not an outcome — it isn't "good/bad/pending", so it
+// stays neutral. Traffic-light color only makes sense for action outcomes.
 function RoleBadge({ role }: { role: string }) {
-  const c = ROLE_COLORS[role] ?? { bg: '#F3F4F6', text: '#6B7280' };
   return (
-    <span
-      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold"
-      style={{ background: c.bg, color: c.text }}
-    >
+    <span className="inline-flex items-center px-2 py-0.5 rounded border border-gray-200 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
       {role}
     </span>
   );
 }
 
-function ActionBadge({ action, success }: { action: string; success: boolean }) {
+type Tone = 'green' | 'yellow' | 'red';
+
+const TONE_STYLES: Record<Tone, { bg: string; text: string; border: string }> = {
+  green:  { bg: '#E7F6EC', text: '#1A5C3A', border: '#B7E4C7' },
+  yellow: { bg: '#FEF9E7', text: '#92700C', border: '#F5E1A4' },
+  red:    { bg: '#FEF2F2', text: '#B91C1C', border: '#FBD5D5' },
+};
+
+// Genuine traffic-light logic: green = completed/positive, red = failed/
+// declined, yellow = neutral or still-pending. A handful of actions can
+// land in any of the three depending on the actual outcome (not just which
+// action ran), so those look inside `details` rather than going purely by
+// action name.
+function actionTone(action: string, success: boolean, details?: string | null): Tone {
+  if (!success) return 'red';
+
+  if (action === 'LOGOUT') return 'yellow';
+
+  if (action === 'CYCLE_ELIGIBILITY_CHANGED' && details) {
+    try {
+      const status = JSON.parse(details).new_status;
+      if (status === 'eligible' || status === 'approved') return 'green';
+      if (status === 'exempted' || status === 'declined') return 'red';
+      if (status === 'pending_approval') return 'yellow';
+    } catch { /* fall through to default below */ }
+  }
+
+  if (action === 'PROJECT_STAGING_TRIAGED' && details) {
+    try {
+      const decision = JSON.parse(details).decision;
+      if (decision === 'eligible') return 'green';
+      if (decision === 'exempted') return 'red';
+      if (decision === 'not_sure') return 'yellow';
+    } catch { /* fall through to default below */ }
+  }
+
+  if (action.includes('DECLINED') || action.includes('REJECTED') || action.includes('FAILED')) return 'red';
+
+  return 'green';
+}
+
+function ActionBadge({ action, success, details }: { action: string; success: boolean; details?: string | null }) {
   const label = AUDIT_ACTION_LABELS[action as keyof typeof AUDIT_ACTION_LABELS] ?? action;
-  const bg = !success ? '#FEE2E2' : action.includes('DECLINED') || action.includes('REJECTED') ? '#FEF3C7' : '#E7F6EC';
-  const text = !success ? '#991B1B' : action.includes('DECLINED') || action.includes('REJECTED') ? '#9B7C2A' : '#1A5C3A';
+  const tone = TONE_STYLES[actionTone(action, success, details)];
   return (
-    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold" style={{ background: bg, color: text }}>
+    <span
+      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border"
+      style={{ background: tone.bg, color: tone.text, borderColor: tone.border }}
+    >
       {label}
     </span>
   );
@@ -121,7 +153,7 @@ function LoginActivityTab() {
           ) : (
             <table className="w-full">
               <thead>
-                <tr style={{ background: '#F8FAF9', borderBottom: '2px solid #E5E7EB' }}>
+                <tr style={{ background: '#F9FAFB', borderBottom: '2px solid #E5E7EB' }}>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Name</th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Login</th>
@@ -172,8 +204,20 @@ function ActivityLogTab() {
         limit,
         search: search || undefined,
         action: action || undefined,
-        date_from: dateFrom ? new Date(dateFrom).toISOString() : undefined,
-        date_to: dateTo ? new Date(dateTo).toISOString() : undefined,
+        // `dateFrom`/`dateTo` come from <input type="date"> as bare
+        // "YYYY-MM-DD" strings. `created_at` in the DB is a NAIVE local
+        // timestamp (MySQL's NOW() — server local time, no tz info), so we
+        // deliberately do NOT go through `new Date(...).toISOString()`
+        // here: that converts to UTC and appends "Z", which FastAPI then
+        // parses as a tz-AWARE datetime. Comparing that against the naive
+        // column silently shifts the boundary by the server's UTC offset
+        // (e.g. -5:30 for IST) — "To: today" would quietly cut off
+        // anything after ~6:30 PM local instead of including the full day.
+        // Plain string concatenation keeps this naive end-to-end and
+        // matches the DB exactly: From = start of that calendar day,
+        // To = end of it (23:59:59.999).
+        date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
+        date_to: dateTo ? `${dateTo}T23:59:59.999` : undefined,
       }),
   });
 
@@ -259,10 +303,10 @@ function ActivityLogTab() {
             <>
               <table className="w-full">
                 <thead>
-                  <tr style={{ background: '#F8FAF9', borderBottom: '2px solid #E5E7EB' }}>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Employee</th>
+                  <tr style={{ background: '#F9FAFB', borderBottom: '2px solid #E5E7EB' }}>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Actor</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Action</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Project Name</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Entity</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">When</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">IP</th>
                   </tr>
@@ -278,7 +322,7 @@ function ActivityLogTab() {
                           <div className="font-semibold text-gray-800 text-sm">{e.actor_name ?? e.actor_emp_id ?? '—'}</div>
                           {e.actor_role && <div className="mt-1"><RoleBadge role={e.actor_role} /></div>}
                         </td>
-                        <td className="px-6 py-4"><ActionBadge action={e.action} success={e.success} /></td>
+                        <td className="px-6 py-4"><ActionBadge action={e.action} success={e.success} details={e.details} /></td>
                         <td className="px-6 py-4 text-sm text-gray-500">
                           {entityLabel(e)}
                         </td>

@@ -24,6 +24,18 @@ import { BRAND }          from '../../utils/constants';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+// A project can have a PmId in TMS (project_manager_id) without it
+// resolving to an actual name (project_manager_name) — e.g. the ID doesn't
+// match any EmpId/FinanceId/UserId in tsms_user. That's a genuinely
+// different situation from "no PM at all", and telling them apart matters:
+// "No PM assigned" implies nobody's responsible; an unresolved ID means
+// someone IS assigned, TMS just can't tell us who by name.
+function pmDisplayText(p: { project_manager_name?: string | null; project_manager_id?: string | null }): string {
+  if (p.project_manager_name) return p.project_manager_name;
+  if (p.project_manager_id) return `PM ID ${p.project_manager_id} (name not found in TMS)`;
+  return 'No PM assigned in TMS';
+}
+
 function fmtDate(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-IN', {
@@ -262,7 +274,7 @@ const ProjectPicker: React.FC<{
               Assigned Project Manager
             </p>
             <p style={{ margin: '2px 0 0', fontSize: 13, fontWeight: 600, color: BRAND.textDark }}>
-              {selected.project_manager_name ?? 'No PM assigned in TMS'}
+              {pmDisplayText(selected)}
             </p>
             {selected.project_manager_email && (
               <p style={{ margin: '1px 0 0', fontSize: 12, color: BRAND.textMid }}>{selected.project_manager_email}</p>
@@ -374,7 +386,7 @@ const CustomerDetailsStep: React.FC<{
               Will be reviewed by (PM)
             </div>
             <div style={{ fontSize: 13, fontWeight: 700, color: BRAND.textDark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {project.project_manager_name ?? 'No PM assigned in TMS'}
+              {pmDisplayText(project)}
             </div>
             {project.project_manager_email && (
               <div style={{ fontSize: 11, color: BRAND.textMid, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
