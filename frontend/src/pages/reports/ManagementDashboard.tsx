@@ -229,7 +229,7 @@ export const ManagementDashboard: React.FC = () => {
             accent="#7C3AED"
           />
           <KpiCard
-            label="Avg CSAT Score" value={avgScore != null ? `${avgScore.toFixed(1)}/5` : '—'}
+            label="Avg CSAT Score" value={avgScore != null ? `${avgScore.toFixed(1)}/10` : '—'}
             sub={currentCycle ? currentCycle.cycle_name ?? currentCycle.cycleName : undefined}
             accent="#D97706"
           />

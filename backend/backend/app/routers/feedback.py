@@ -852,13 +852,13 @@ def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(g
         request_id = req_row.id
 
         # CustomerSurveyPage.tsx collects "Overall Rating on a scale of 1-10"
-        # as body.data['overallRating']. Dashboard KPIs report CSAT on a /5
-        # scale, so convert here once at write time rather than doing the
-        # conversion (or re-deriving it from response_data) at every read.
+        # as body.data['overallRating']. Stored as-is (1-10 scale) — the
+        # dashboard KPIs report CSAT on the same /10 scale the survey itself
+        # uses, no conversion needed.
         overall_rating = body.data.get("overallRating")
         csat_score = None
         if isinstance(overall_rating, (int, float)):
-            csat_score = round(overall_rating / 2.0, 2)
+            csat_score = round(float(overall_rating), 2)
 
         db.execute(
             text("""

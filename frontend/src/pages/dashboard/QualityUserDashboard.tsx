@@ -20,6 +20,7 @@ const STATUS_META: Record<string, { label: string; bg: string; color: string; do
   ELIGIBLE:      { label: 'Eligible',      bg: '#E8F2EC', color: '#1A5C3A', dot: '#22C55E' },
   DRAFT:         { label: 'Draft',         bg: '#F3F4F6', color: '#6B7280', dot: '#9CA3AF' },
   SENT:          { label: 'Sent',          bg: '#EEF4FF', color: '#2563EB', dot: '#3B82F6' },
+  OPENED:        { label: 'Opened',        bg: '#FDF6E3', color: '#9B7C2A', dot: '#F59E0B' },
   SUBMITTED:     { label: 'Submitted',     bg: '#E8F2EC', color: '#1A5C3A', dot: '#22C55E' },
   EXPIRED:       { label: 'Expired',       bg: '#FEF2F2', color: '#DC2626', dot: '#EF4444' },
   REMINDER_SENT: { label: 'Reminder Sent', bg: '#EEF4FF', color: '#2563EB', dot: '#3B82F6' },
@@ -275,7 +276,7 @@ export const QualityUserDashboard: React.FC = () => {
                ?? feedbackRequests.filter(r => ['SUBMITTED', 'completed'].includes(r.status)).length,
     pending:   dashData?.metrics?.totalPending
                ?? dashData?.pendingRequests
-               ?? feedbackRequests.filter(r => ['pending', 'SENT', 'ELIGIBLE', 'sent'].includes(r.status)).length,
+               ?? feedbackRequests.filter(r => ['pending', 'SENT', 'OPENED', 'ELIGIBLE', 'sent', 'opened'].includes(r.status)).length,
     expired:   dashData?.metrics?.totalExpired
                ?? feedbackRequests.filter(r => ['EXPIRED', 'expired'].includes(r.status)).length,
     responseRate: dashData?.metrics?.satisfactionRate != null
@@ -322,7 +323,7 @@ export const QualityUserDashboard: React.FC = () => {
         <KpiCard label="Submitted"      value={kpis.submitted}    accent="#2563EB"       icon={Icon.check}    sub="Responses received" />
         <KpiCard label="Pending"        value={kpis.pending}      accent={BRAND.gold}    icon={Icon.clock}    sub="Awaiting response" />
         <KpiCard label="Expired"        value={kpis.expired}      accent="#DC2626"       icon={Icon.alert}    sub="Links timed out" />
-        <KpiCard label="Avg CSAT Score" value={kpis.avgScore}     accent={BRAND.green}   icon={Icon.star}     sub="Out of 5.0" />
+        <KpiCard label="Avg CSAT Score" value={kpis.avgScore}     accent={BRAND.green}   icon={Icon.star}     sub="Out of 10.0" />
         <KpiCard label="Response Rate"  value={kpis.responseRate} accent="#2563EB"       icon={Icon.trending} sub="Submitted ÷ sent" />
       </div>
 
@@ -448,6 +449,7 @@ export const QualityUserDashboard: React.FC = () => {
             {[
               { s: 'ELIGIBLE',  desc: 'Ready to send' },
               { s: 'SENT',      desc: 'Emailed to customer' },
+              { s: 'OPENED',    desc: 'Customer opened link' },
               { s: 'SUBMITTED', desc: 'Response received' },
               { s: 'EXPIRED',   desc: 'Link timed out' },
             ].map(({ s, desc }) => (
