@@ -23,17 +23,18 @@ csat-tool/
 ## Prerequisites
 
 - Python 3.9+ 
-- Node.js 18+ 
+- React ^18.2.0
+- TypeScript ^5.3.3
 - MySQL (Local instance for `csat_tool_db`)
 
 ## Quick Start
 
 ### 1. Database Setup
-Create your local MySQL database and ensure you have access to the TMS database (read-only). Configure these in `backend/.env`. You can use `backend/create_missing_tables.py` and `backend/insert_dummy_csat_data.py` to seed initial data.
+Create your local MySQL database and ensure you have access to the TMS database (read-only). Configure these in `backend/.env`. You can use `database/schema.sql` to seed initial data.
 
 ### 2. Backend
 ```bash
-cd backend
+cd backend/backend
 python -m venv venv
 # On Windows: venv\Scripts\activate
 # On Mac/Linux: source venv/bin/activate
