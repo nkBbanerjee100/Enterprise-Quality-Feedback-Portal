@@ -512,7 +512,6 @@ const StatusSection: React.FC = () => {
   const statuses: Array<{ label: string; bg: string; color: string; desc: string }> = [
     { label: 'Eligible',      bg: '#E8F2EC', color: G,        desc: 'Project completed in TMS — ready for feedback' },
     { label: 'Sent',          bg: '#EEF4FF', color: '#2563EB', desc: 'Secure feedback link emailed to customer' },
-    { label: 'Opened',        bg: '#FDF6E3', color: GOLD,      desc: 'Customer clicked the link' },
     { label: 'Submitted',     bg: '#E8F2EC', color: G,        desc: 'Customer filled and submitted the form' },
     // { label: 'Reminder Sent', bg: '#EEF4FF', color: '#2563EB', desc: 'Follow-up email sent after no response' },
     { label: 'Expired',       bg: '#FEF2F2', color: '#DC2626', desc: 'Link expired — can be resent' },

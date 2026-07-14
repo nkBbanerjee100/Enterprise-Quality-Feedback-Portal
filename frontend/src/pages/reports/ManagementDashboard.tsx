@@ -20,18 +20,20 @@ import { BRAND } from '../../utils/constants';
 
 // ─── KPI card (no trend sparkline — per this pass) ────────────────────────────
 const KpiCard: React.FC<{
-  label: string; value: string | number; sub?: string; accent: string; icon: string;
+  label: string; value: string | number; sub?: string; accent: string; icon?: string;
 }> = ({ label, value, sub, accent, icon }) => (
   <div style={{
     background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
     padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14,
   }}>
-    <div style={{
-      width: 40, height: 40, borderRadius: 10, background: `${accent}1A`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
-    }}>
-      {icon}
-    </div>
+    {icon && (
+      <div style={{
+        width: 40, height: 40, borderRadius: 10, background: `${accent}1A`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
+      }}>
+        {icon}
+      </div>
+    )}
     <div>
       <p style={{ fontSize: 26, fontWeight: 700, color: BRAND.textDark, margin: 0, lineHeight: 1.1 }}>{value}</p>
       <p style={{ fontSize: 13, color: BRAND.textMid, margin: '4px 0 0', fontWeight: 500 }}>{label}</p>
@@ -199,15 +201,9 @@ export const ManagementDashboard: React.FC = () => {
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: 10, background: '#E7F6EC',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0,
-          }}>
-            📷
-          </div>
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 700, color: BRAND.textDark, margin: 0 }}>
-              {greeting}, {firstName}! 👋
+              {greeting}, {firstName}!
             </h1>
             <p style={{ fontSize: 13, color: BRAND.textMid, margin: '2px 0 0' }}>
               Here's what's happening with your CSAT cycles.
@@ -220,22 +216,22 @@ export const ManagementDashboard: React.FC = () => {
           <KpiCard
             label="Eligible Projects" value={eligibleLoading ? '—' : (readyCount ?? eligibleTotal)}
             sub={readyCount ? `${readyCount} ready in this cycle` : undefined}
-            accent="#1A5C3A" icon="✅"
+            accent="#1A5C3A"
           />
           <KpiCard
             label="Completed Projects" value={completedLoading ? '—' : completedTotal}
             sub={cyclePeriod ?? undefined}
-            accent="#2563EB" icon="✓"
+            accent="#2563EB"
           />
           <KpiCard
             label="Eligibility Rate" value={eligibilityRate != null ? `${eligibilityRate}%` : '—'}
             sub="Across all projects in this cycle"
-            accent="#7C3AED" icon="◎"
+            accent="#7C3AED"
           />
           <KpiCard
             label="Avg CSAT Score" value={avgScore != null ? `${avgScore.toFixed(1)}/5` : '—'}
             sub={currentCycle ? currentCycle.cycle_name ?? currentCycle.cycleName : undefined}
-            accent="#D97706" icon="🏅"
+            accent="#D97706"
           />
         </div>
 

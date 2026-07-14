@@ -75,13 +75,12 @@ class PMRejectPayload(BaseModel):
     pmRejectionComments: str
 
 
-class SurveyAnswer(BaseModel):
-    questionId: int
-    value:      str
-
-
 class SurveySubmitPayload(BaseModel):
-    answers: list[SurveyAnswer]
+    """Matches what CustomerSurveyPage.tsx actually POSTs: a single rich
+    object (ratings, per-question comments, overall assessment, signature,
+    etc.), not a flat list of {questionId, value} pairs. Stored verbatim as
+    JSON in fact_feedback_response.response_data."""
+    data: dict
 
 
 class VerifyTokenRequest(BaseModel):
@@ -114,7 +113,7 @@ def _hash_token(token: str) -> str:
 
 def _build_email_html(
     recipient_name: str,
-    project_id: int,
+    project_name: str,
     survey_link: str,
     personal_message: Optional[str],
     token: str
@@ -153,7 +152,7 @@ def _build_email_html(
 
 
       <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 16px;">
-        Thank you for working with us on project <strong>#{project_id}</strong>.
+        Thank you for working with us on project <strong>{project_name}</strong>.
         We'd love to hear how your experience was.
       </p>
 
@@ -230,7 +229,7 @@ def _build_email_html(
 
 def _build_email_text(
     recipient_name: str,
-    project_id: int,
+    project_name: str,
     survey_link: str,
     personal_message: Optional[str],
     token: str,
@@ -239,7 +238,7 @@ def _build_email_text(
     lines = [
         f"Dear {recipient_name},",
         "",
-        f"Thank you for working with us on project #{project_id}.",
+        f"Thank you for working with us on project {project_name}.",
         "",
     ]
 
@@ -644,6 +643,7 @@ def send_to_customer(
     row.recipient_email
     )
 
+    project_name = _project_name(row.project_id, tms_db)
 
     survey_link = (
         f"{settings.FRONTEND_URL}/survey-access"
@@ -664,17 +664,17 @@ def send_to_customer(
 
     email_sent = EmailSender.send_email(
         to=row.recipient_email,
-        subject=f"[Feedback Request] Project #{row.project_id} — Please Share Your Experience",
+        subject=f"[Feedback Request] {project_name} — Please Share Your Experience",
         body=_build_email_text(
             row.recipient_name,
-            row.project_id,
+            project_name,
             survey_link,
             row.message,
             token
         ),
         html_content=_build_email_html(
             row.recipient_name,
-            row.project_id,
+            project_name,
             survey_link,
             row.message,
             token
@@ -714,7 +714,7 @@ def send_to_customer(
         actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="feedback_request", entity_id=request_id,
-        details={"project_id": row.project_id, "project_name": _project_name(row.project_id, tms_db), "sent_to": row.recipient_email},
+        details={"project_id": row.project_id, "project_name": project_name, "sent_to": row.recipient_email},
     )
 
     return {
@@ -833,14 +833,8 @@ def get_survey_by_token(token: str, db: Session = Depends(get_local_db), tms_db:
 @router.post("/public/{token}/submit", status_code=status.HTTP_201_CREATED)
 def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(get_local_db)):
     """
-    Validate token, save answers to fact_feedback_response, mark request completed.
-
-    NOTE: this endpoint's schema (a flat list of {questionId, value} answers)
-    predates the current CustomerSurveyPage.tsx, which now submits a single
-    rich JSON blob ({ data: {...} }) instead. That mismatch is a pre-existing,
-    separate issue from the PM-achievements work here and hasn't been
-    resolved in this pass — the survey's actual submit call will not match
-    this schema until that's addressed.
+    Validate token, save the customer's full survey response to
+    fact_feedback_response.response_data, mark request completed.
     """
     req_row = db.execute(
         text("SELECT id, status, expires_at FROM fact_feedback_request WHERE token = :token LIMIT 1"),
@@ -856,20 +850,29 @@ def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(g
 
     try:
         request_id = req_row.id
-        for answer in body.answers:
-            db.execute(
-                text("""
-                    INSERT INTO fact_feedback_response
-                        (feedback_request_id, question_id, answer_value, submitted_at)
-                    VALUES
-                        (:request_id, :question_id, :answer_value, NOW())
-                """),
-                {
-                    "request_id":   request_id,
-                    "question_id":  answer.questionId,
-                    "answer_value": answer.value,
-                },
-            )
+
+        # CustomerSurveyPage.tsx collects "Overall Rating on a scale of 1-10"
+        # as body.data['overallRating']. Dashboard KPIs report CSAT on a /5
+        # scale, so convert here once at write time rather than doing the
+        # conversion (or re-deriving it from response_data) at every read.
+        overall_rating = body.data.get("overallRating")
+        csat_score = None
+        if isinstance(overall_rating, (int, float)):
+            csat_score = round(overall_rating / 2.0, 2)
+
+        db.execute(
+            text("""
+                INSERT INTO fact_feedback_response
+                    (feedback_request_id, response_data, csat_score, submitted_at)
+                VALUES
+                    (:request_id, :response_data, :csat_score, NOW())
+            """),
+            {
+                "request_id":    request_id,
+                "response_data": json.dumps(body.data),
+                "csat_score":    csat_score,
+            },
+        )
         db.execute(
             text("UPDATE fact_feedback_request SET status = 'completed' WHERE id = :id"),
             {"id": request_id},
@@ -878,6 +881,7 @@ def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(g
     except Exception as e:
         db.rollback()
         print(f"[WARN] Could not save survey responses: {e}")
+        raise HTTPException(status_code=500, detail="Could not save your responses. Please try again.")
 
     return {"success": True, "message": "Thank you! Your feedback has been recorded."}
 
@@ -914,15 +918,24 @@ def get_request_responses(
     except Exception:
         pass
 
-    answers = db.execute(
+    response_rows = db.execute(
         text("""
-            SELECT id, question_id, answer_value, submitted_at
+            SELECT id, response_data, submitted_at
             FROM fact_feedback_response
             WHERE feedback_request_id = :id
-            ORDER BY question_id ASC
+            ORDER BY submitted_at ASC
         """),
         {"id": request_id},
     ).fetchall()
+
+    responses = [
+        {
+            "id":          r.id,
+            "data":        json.loads(r.response_data) if r.response_data else {},
+            "submittedAt": r.submitted_at.isoformat() if r.submitted_at else None,
+        }
+        for r in response_rows
+    ]
 
     return {
         "request": {
@@ -935,14 +948,10 @@ def get_request_responses(
             "createdAt":      req.created_at.isoformat() if req.created_at else None,
             "requestSentAt":  req.request_sent_at.isoformat() if req.request_sent_at else None,
         },
-        "answers": [
-            {
-                "id":          a.id,
-                "questionId":  a.question_id,
-                "answerValue": a.answer_value,
-                "submittedAt": a.submitted_at.isoformat() if a.submitted_at else None,
-            }
-            for a in answers
-        ],
-        "totalAnswers": len(answers),
+        # "responses" carries the full submitted blob (ratings, comments,
+        # signature, etc.) — this is what FeedbackRequestListPage.tsx reads.
+        "responses": responses,
+        # "answers" is kept as a thin alias so the header's "Submitted" date
+        # (data.answers?.[0]?.submittedAt) keeps working without a frontend change.
+        "answers": [{"submittedAt": r["submittedAt"]} for r in responses],
     }

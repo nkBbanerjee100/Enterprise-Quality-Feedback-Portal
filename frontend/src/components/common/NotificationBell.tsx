@@ -104,6 +104,15 @@ export const NotificationBell: React.FC = () => {
 
   const unreadCount = unread?.unread_count ?? 0;
 
+  // Clear the unread badge as soon as the person opens the panel, instead
+  // of requiring a separate "Mark all read" click every time.
+  useEffect(() => {
+    if (open && unreadCount > 0 && markAllRead.status !== 'pending') {
+      markAllRead.mutate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button

@@ -36,7 +36,6 @@ const STATUS_META: Record<string, { label: string; bg: string; color: string; do
   draft:     { label: 'Draft',     bg: '#F3F4F6', color: '#6B7280', dot: '#9CA3AF' },
   pending:   { label: 'Pending',   bg: '#FDF6E3', color: '#9B7C2A', dot: '#F59E0B' },
   sent:      { label: 'Sent',      bg: '#EEF4FF', color: '#2563EB', dot: '#3B82F6' },
-  opened:    { label: 'Opened',    bg: '#FDF6E3', color: '#9B7C2A', dot: '#F59E0B' },
   completed: { label: 'Submitted', bg: '#E8F2EC', color: '#1A5C3A', dot: '#22C55E' },
   expired:   { label: 'Expired',   bg: '#FEF2F2', color: '#DC2626', dot: '#EF4444' },
   cancelled: { label: 'Cancelled', bg: '#F3F4F6', color: '#6B7280', dot: '#9CA3AF' },

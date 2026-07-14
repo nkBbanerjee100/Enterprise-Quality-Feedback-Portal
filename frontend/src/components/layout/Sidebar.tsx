@@ -4,7 +4,7 @@
  * User type: { emp_id, first_name, last_name, email, role, is_active }
  * No displayName field — use first_name + last_name throughout
  */
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '../../store/auth.store';
@@ -12,6 +12,9 @@ import { UserRole } from '../../types/auth.types';
 import { ROUTES } from '../../utils/constants';
 import { BRAND } from '../../utils/constants';
 import { reviewsApi } from '../../api/reviews.api';
+
+const SIDEBAR_COLLAPSE_KEY = 'csat_sidebar_collapsed';
+const SIDEBAR_NAV_OPEN_KEY = 'csat_sidebar_nav_open';
 
 // Same transparent white-on-green wordmark already used on the customer
 // survey header (CustomerSurveyPage.tsx) — the old local mindteckLogo.png
@@ -53,8 +56,10 @@ const NAV_ITEMS: NavItem[] = [
     label: 'CSAT Cycles',
     path:  ROUTES.CSAT_CYCLES,
     icon:  '↺',
-        roles: [UserRole.QUALITY, UserRole.DELIVERY, UserRole.SALES , UserRole.MANAGER , UserRole.MANAGEMENT],
-
+    // Matches the RoleProtectedRoute guard on /csat-cycles in App.tsx —
+    // DELIVERY/SALES don't have access to that route, so don't show them
+    // a nav link that would just land on /unauthorized.
+    roles: [UserRole.QUALITY, UserRole.MANAGER, UserRole.MANAGEMENT],
   },
   {
     label: 'Needs Your Review',
@@ -92,6 +97,43 @@ export const Sidebar: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
 
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSE_KEY, collapsed ? '1' : '0');
+    } catch {
+      // localStorage unavailable (private browsing, etc.) — collapse state
+      // just won't persist across reloads, which is a harmless fallback.
+    }
+  }, [collapsed]);
+
+  // Separate vertical accordion toggle for the nav list itself — independent
+  // of the left/right width collapse above. Click the chevron above the nav
+  // items to fold the whole menu list up/down.
+  const [navOpen, setNavOpen] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(SIDEBAR_NAV_OPEN_KEY);
+      return stored === null ? true : stored === '1';
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_NAV_OPEN_KEY, navOpen ? '1' : '0');
+    } catch {
+      // Same harmless fallback as above.
+    }
+  }, [navOpen]);
+
   const visibleItems = NAV_ITEMS.filter(
     (item) => user && item.roles.includes(user.role)
   );
@@ -118,17 +160,49 @@ export const Sidebar: React.FC = () => {
       style={{
         background: '#1A5C3A',
         minHeight: '100vh',
-        width: '240px',
+        width: collapsed ? '72px' : '240px',
         display: 'flex',
         flexDirection: 'column',
         flexShrink: 0,
+        position: 'relative',
+        transition: 'width 0.18s ease',
       }}
     >
+      {/* ── Collapse/expand toggle ── */}
+      <button
+        onClick={() => setCollapsed((c) => !c)}
+        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        style={{
+          position: 'absolute',
+          top: '24px',
+          right: '-11px',
+          width: '22px',
+          height: '22px',
+          borderRadius: '50%',
+          background: '#1A5C3A',
+          border: '1px solid rgba(255,255,255,0.25)',
+          color: '#fff',
+          fontSize: '11px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          zIndex: 2,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+        }}
+      >
+        {collapsed ? '›' : '‹'}
+      </button>
       {/* ── Logo area ── */}
       <div
         style={{
-          padding: '28px 20px 22px',
+          padding: collapsed ? '28px 12px 22px' : '28px 20px 22px',
           borderBottom: '1px solid rgba(255,255,255,0.12)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: collapsed ? 'center' : 'stretch',
+          overflow: 'hidden',
         }}
       >
         <img
@@ -137,26 +211,30 @@ export const Sidebar: React.FC = () => {
           style={{
             height: '30px',
             width: 'auto',
+            maxWidth: collapsed ? '30px' : 'none',
             objectFit: 'contain',
             display: 'block',
           }}
         />
-        <p
-          style={{
-            color: 'rgba(255,255,255,0.55)',
-            fontSize: '10.5px',
-            marginTop: '14px',
-            letterSpacing: '0.12em',
-            textTransform: 'uppercase',
-            fontWeight: 600,
-          }}
-        >
-          Quality Feedback Platform
-        </p>
+        {!collapsed && (
+          <p
+            style={{
+              color: 'rgba(255,255,255,0.55)',
+              fontSize: '10.5px',
+              marginTop: '14px',
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Quality Feedback Platform
+          </p>
+        )}
       </div>
 
       {/* ── Role badge + name ── */}
-      {user && (
+      {user && !collapsed && (
         <div
           style={{
             padding: '12px 16px',
@@ -210,20 +288,79 @@ export const Sidebar: React.FC = () => {
           </p>
         </div>
       )}
+      {user && collapsed && (
+        <div
+          title={`${ROLE_LABEL[user.role] ?? user.role}${fullName ? ' — ' + fullName : ''}`}
+          style={{
+            padding: '12px 0',
+            borderBottom: '1px solid rgba(255,255,255,0.08)',
+            display: 'flex',
+            justifyContent: 'center',
+          }}
+        >
+          <span
+            style={{
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              background: '#C4A44A',
+              display: 'inline-block',
+            }}
+          />
+        </div>
+      )}
+
+      {/* ── Nav section header + vertical accordion toggle ── */}
+      {!collapsed && (
+        <button
+          onClick={() => setNavOpen((o) => !o)}
+          aria-expanded={navOpen}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            width: '100%',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '14px 18px 6px',
+            color: 'rgba(255,255,255,0.45)',
+            fontSize: '10.5px',
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+          }}
+        >
+          <span>Menu</span>
+          <span
+            style={{
+              display: 'inline-block',
+              fontSize: '11px',
+              transition: 'transform 0.15s ease',
+              transform: navOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+            }}
+          >
+            ⌄
+          </span>
+        </button>
+      )}
 
       {/* ── Nav items ── */}
-      <nav style={{ flex: 1, padding: '10px 0' }}>
+      {(collapsed || navOpen) && (
+      <nav style={{ flex: collapsed ? 1 : undefined, padding: '10px 0' }}>
         {visibleItems.map((item) => {
           const active = isActive(item.path);
           return (
             <Link
               key={item.path}
               to={item.path}
+              title={collapsed ? item.label : undefined}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '10px',
-                padding: '10px 18px',
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                gap: collapsed ? 0 : '10px',
+                padding: collapsed ? '10px 0' : '10px 18px',
                 margin: '1px 8px',
                 borderRadius: '8px',
                 textDecoration: 'none',
@@ -233,6 +370,7 @@ export const Sidebar: React.FC = () => {
                 background: active ? 'rgba(255,255,255,0.13)' : 'transparent',
                 borderLeft: active ? '3px solid #9B7C2A' : '3px solid transparent',
                 transition: 'background 0.12s ease, color 0.12s ease',
+                position: 'relative',
               }}
               onMouseEnter={(e) => {
                 if (!active) {
@@ -258,8 +396,8 @@ export const Sidebar: React.FC = () => {
               >
                 {item.icon}
               </span>
-              <span style={{ flex: 1 }}>{item.label}</span>
-              {item.path === ROUTES.REVIEWS && !!pendingCount && (
+              {!collapsed && <span style={{ flex: 1 }}>{item.label}</span>}
+              {item.path === ROUTES.REVIEWS && !!pendingCount && !collapsed && (
                 <span
                   style={{
                     fontSize: '11px',
@@ -274,11 +412,27 @@ export const Sidebar: React.FC = () => {
                   {pendingCount}
                 </span>
               )}
+              {item.path === ROUTES.REVIEWS && !!pendingCount && collapsed && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '6px',
+                    right: '14px',
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: '#DC2626',
+                    border: '1px solid #1A5C3A',
+                  }}
+                />
+              )}
             </Link>
           );
         })}
       </nav>
-      {/* Promo card — bottom of sidebar */}
+      )}
+      {/* Promo card — bottom of sidebar (hidden when collapsed, no room for it) */}
+{!collapsed && (
 <div style={{
   margin: '16px 12px',
   background: 'linear-gradient(135deg, #1A5C3A 0%, #0D3B26 100%)',
@@ -360,17 +514,25 @@ export const Sidebar: React.FC = () => {
     View Analytics <span style={{ fontSize: 13 }}>↗</span>
   </button>
 </div>
+)}
 
       {/* ── Footer ── */}
       <div
         style={{
-          padding: '14px 16px',
+          padding: collapsed ? '14px 0' : '14px 16px',
           borderTop: '1px solid rgba(255,255,255,0.08)',
+          textAlign: collapsed ? 'center' : 'left',
         }}
       >
-        <p style={{ color: 'rgba(255,255,255,0.28)', fontSize: '10.5px', margin: 0 }}>
-          © {new Date().getFullYear()} CSAT Tool · Quality Dept
-        </p>
+        {collapsed ? (
+          <p style={{ color: 'rgba(255,255,255,0.28)', fontSize: '10.5px', margin: 0 }} title={`© ${new Date().getFullYear()} CSAT Tool · Quality Dept`}>
+            ©
+          </p>
+        ) : (
+          <p style={{ color: 'rgba(255,255,255,0.28)', fontSize: '10.5px', margin: 0 }}>
+            © {new Date().getFullYear()} CSAT Tool · Quality Dept
+          </p>
+        )}
       </div>
     </aside>
   );

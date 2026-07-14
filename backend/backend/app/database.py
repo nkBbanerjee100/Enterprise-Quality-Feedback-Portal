@@ -17,8 +17,8 @@ from app.config import settings
 #==================================================================
 LOCAL_DATABASE_URL = URL.create(
     "mysql+pymysql",
-    username="root",
-    password="root",
+    username="csat_user",
+    password="B@B@n2001",
     host="127.0.0.1",
     port=3306,
     database="csat_tool_db",
