@@ -1,18 +1,22 @@
 /**
  * Notification Bell — dropdown list of in-app notifications.
  * Polls unread count every 30s; opens a dropdown with the recent list.
+ *
+ * NOTE: this used to let Management approve/decline a staged project
+ * directly from the notification (inline buttons). That only ever covered
+ * ONE of five Management decision points (STAGED_PROJECT_NEEDS_REVIEW) —
+ * exemption requests and any enrollment-level review were never wired up,
+ * so the buttons appeared inconsistently and looked broken. Removed rather
+ * than half-fixed; every notification now just navigates to the real page
+ * via its `link`, same as every other notification type already did.
  */
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   useUnreadNotificationCount, useNotifications,
   useMarkNotificationRead, useMarkAllNotificationsRead,
 } from '../../hooks/useNotifications';
 import { Notification } from '../../types/notification.types';
-import { projectStagingApi } from '../../api/project-staging.api';
-import { useAuthStore } from '../../store/auth.store';
-import { UserRole } from '../../types/auth.types';
 import { BRAND } from '../../utils/constants';
 
 function timeAgo(iso: string): string {
@@ -28,8 +32,6 @@ function timeAgo(iso: string): string {
 
 export const NotificationBell: React.FC = () => {
   const navigate = useNavigate();
-  const qc = useQueryClient();
-  const { user } = useAuthStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -37,39 +39,6 @@ export const NotificationBell: React.FC = () => {
   const { data: list, isLoading, isError: listError } = useNotifications();
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllNotificationsRead();
-
-  // Management can approve/decline a staged project's eligibility directly
-  // from the notification — no need to go find it on the Select Projects
-  // page first. Tracked client-side per notification id so the buttons
-  // disappear immediately after acting, regardless of whether it succeeded
-  // or someone else already decided it in the meantime.
-  const [resolvedNote, setResolvedNote] = useState<Record<number, string>>({});
-  const [decidingId, setDecidingId] = useState<number | null>(null);
-  const decideMutation = useMutation({
-    mutationFn: ({ stagingId, approve }: { stagingId: number; approve: boolean }) =>
-      projectStagingApi.decide(stagingId, approve),
-  });
-
-  const handleDecide = async (n: Notification, approve: boolean) => {
-    if (!n.enrollment_id || decidingId === n.id) return;
-    setDecidingId(n.id);
-    try {
-      await decideMutation.mutateAsync({ stagingId: n.enrollment_id, approve });
-      setResolvedNote(prev => ({ ...prev, [n.id]: approve ? 'Marked eligible ✓' : 'Declined' }));
-    } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setResolvedNote(prev => ({ ...prev, [n.id]: detail || 'Could not update — already resolved?' }));
-    } finally {
-      setDecidingId(null);
-      if (!n.is_read) markRead.mutate(n.id);
-      qc.invalidateQueries({ queryKey: ['staging-pool'] });
-      qc.invalidateQueries({ queryKey: ['staging-candidates'] });
-      qc.invalidateQueries({ queryKey: ['notifications'] });
-      qc.invalidateQueries({ queryKey: ['notifications-unread-count'] });
-    }
-  };
-
-  const isManagement = user?.role === UserRole.MANAGEMENT;
 
   useEffect(() => {
     if (unreadError) {
@@ -219,99 +188,42 @@ export const NotificationBell: React.FC = () => {
                 You're all caught up.
               </p>
             ) : (
-              list.data.map(n => {
-                const isReviewType = n.type === 'STAGED_PROJECT_NEEDS_REVIEW';
-                // Still awaiting a decision, per the LIVE backend status — not
-                // is_read (which only means "seen"), and not just whatever this
-                // component remembered before the last refresh/re-login.
-                const stillPending = n.staging_status === 'pending_management_review';
-                const canDecideHere = isManagement && isReviewType && !!n.enrollment_id && stillPending;
-                // Prefer what just happened in this session; otherwise fall
-                // back to the backend's live status, so a resolved item shows
-                // correctly even on a brand-new session with no client state.
-                const note = resolvedNote[n.id]
-                  ?? (isReviewType && n.staging_status && n.staging_status !== 'pending_management_review'
-                    ? (n.staging_status === 'eligible' ? 'Marked eligible ✓' : 'Declined')
-                    : undefined);
-                const showActionArea = isReviewType && (canDecideHere || !!note);
-
-                return (
-                  <div
-                    key={n.id}
+              list.data.map(n => (
+                <button
+                  key={n.id}
+                  onClick={() => handleClick(n)}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '12px 16px',
+                    border: 'none',
+                    borderBottom: '1px solid #F3F4F6',
+                    background: n.is_read ? '#fff' : '#F7FBF9',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    gap: '8px',
+                  }}
+                >
+                  <span
                     style={{
-                      borderBottom: '1px solid #F3F4F6',
-                      background: n.is_read ? '#fff' : '#F7FBF9',
+                      width: '7px', height: '7px', borderRadius: '50%',
+                      background: n.is_read ? 'transparent' : BRAND.green,
+                      marginTop: '5px', flexShrink: 0,
                     }}
-                  >
-                    <button
-                      onClick={() => handleClick(n)}
-                      style={{
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '12px 16px',
-                        paddingBottom: showActionArea ? '4px' : '12px',
-                        border: 'none',
-                        background: 'transparent',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        gap: '8px',
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: '7px', height: '7px', borderRadius: '50%',
-                          background: n.is_read ? 'transparent' : BRAND.green,
-                          marginTop: '5px', flexShrink: 0,
-                        }}
-                      />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: '12.5px', fontWeight: n.is_read ? 500 : 700, color: BRAND.textDark, margin: 0 }}>
-                          {n.title}
-                        </p>
-                        <p style={{ fontSize: '11.5px', color: BRAND.textMid, margin: '3px 0 0', lineHeight: 1.4 }}>
-                          {n.message}
-                        </p>
-                        <p style={{ fontSize: '10.5px', color: BRAND.textLight, margin: '4px 0 0' }}>
-                          {timeAgo(n.created_at)}
-                        </p>
-                      </div>
-                    </button>
-
-                    {showActionArea && (
-                      <div style={{ padding: '0 16px 12px 33px' }}>
-                        {note ? (
-                          <span style={{ fontSize: '11px', color: BRAND.textMid, fontWeight: 600 }}>{note}</span>
-                        ) : (
-                          <div style={{ display: 'flex', gap: '6px' }}>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleDecide(n, true); }}
-                              disabled={decidingId === n.id}
-                              style={{
-                                fontSize: '11px', fontWeight: 700, color: '#fff', background: '#059669',
-                                border: 'none', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer',
-                                opacity: decidingId === n.id ? 0.6 : 1,
-                              }}
-                            >
-                              ✓ Approve
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleDecide(n, false); }}
-                              disabled={decidingId === n.id}
-                              style={{
-                                fontSize: '11px', fontWeight: 700, color: '#991B1B', background: '#FEE2E2',
-                                border: 'none', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer',
-                                opacity: decidingId === n.id ? 0.6 : 1,
-                              }}
-                            >
-                              ✕ Decline
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: '12.5px', fontWeight: n.is_read ? 500 : 700, color: BRAND.textDark, margin: 0 }}>
+                      {n.title}
+                    </p>
+                    <p style={{ fontSize: '11.5px', color: BRAND.textMid, margin: '3px 0 0', lineHeight: 1.4 }}>
+                      {n.message}
+                    </p>
+                    <p style={{ fontSize: '10.5px', color: BRAND.textLight, margin: '4px 0 0' }}>
+                      {timeAgo(n.created_at)}
+                    </p>
                   </div>
-                );
-              })
+                </button>
+              ))
             )}
           </div>
         </div>

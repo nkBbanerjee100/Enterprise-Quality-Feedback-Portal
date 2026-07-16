@@ -218,6 +218,12 @@ export const CustomerSurveyPage: React.FC = () => {
 
     if (overallRating === null) newErrors['overallRating'] = 'Required';
     if (!overallAssessment) newErrors['overallAssessment'] = 'Required';
+    if (
+      ['Poor', 'Average', 'Good'].includes(overallAssessment) &&
+      !areasToImprove.trim()
+    ) {
+      newErrors['areasToImprove'] = 'Required';
+    }
     if (!respondentName.trim()) newErrors['respondentName'] = 'Required';
     if (!signature.trim()) newErrors['signature'] = 'Required';
 
@@ -557,12 +563,32 @@ export const CustomerSurveyPage: React.FC = () => {
             <div className="border border-green-200 rounded-lg p-1 bg-[#fcfdfc]">
               <div className="flex items-center space-x-2 p-3 pb-2 text-gray-800 font-semibold text-sm">
                 <ImproveIcon />
-                <span>Areas you would like us to improve on or/and<br/>any other suggestions: <span className="text-gray-500 text-xs font-normal">(Optional)</span></span>
+                <span>
+  Areas you would like us to improve on or/and<br />
+  any other suggestions:{' '}
+  {['Poor', 'Average', 'Good'].includes(overallAssessment) ? (
+<span className="text-red-500 text-xs font-normal">(Required)</span>
+  ) : (
+<span className="text-gray-500 text-xs font-normal">(Optional)</span>
+  )}
+</span>
+                {/* <span>Areas you would like us to improve on or/and<br/>any other suggestions: <span className="text-gray-500 text-xs font-normal">(Optional)</span></span> */}
               </div>
               <div className="relative">
                 <textarea 
                   value={areasToImprove}
-                  onChange={e => setAreasToImprove(e.target.value)}
+                  // onChange={e => setAreasToImprove(e.target.value)}
+                  onChange={e => {
+  setAreasToImprove(e.target.value);
+ 
+  if (e.target.value.trim()) {
+    setErrors(prev => {
+      const next = { ...prev };
+      delete next.areasToImprove;
+      return next;
+    });
+  }
+}}
                   className="w-[calc(100%-8px)] border border-gray-200 bg-white rounded p-4 m-1 min-h-[100px] text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-green-500 block resize-y"
                   placeholder="Type your suggestions here..."
                 />
