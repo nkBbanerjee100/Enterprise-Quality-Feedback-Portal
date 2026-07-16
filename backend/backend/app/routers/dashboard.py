@@ -1,7 +1,7 @@
 """Dashboard metrics routes — real data from csat_tool_db"""
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from app.database import get_local_db, get_tms_db
 from app.core.dependencies import get_current_user
 from app.services.cycle_notification_service import get_project_manager
@@ -115,19 +115,17 @@ def get_dashboard(
     # optional number.
     average_csat_score = None
     try:
-        # Built directly (not via scope_clause.replace(...)) — replacing the
-        # substring "project_id" inside scope_clause also matched the bind
-        # parameter name ":project_ids" itself, corrupting it into
-        # ":r.project_ids" and breaking the query entirely.
-        avg_scope_clause = "AND r.project_id IN :project_ids" if project_ids else ""
+        avg_scope_clause = "AND r.project_id IN :project_ids" if project_ids is not None and project_ids else ""
+        avg_params = {"project_ids": tuple(project_ids)} if project_ids is not None and project_ids else {}
         avg_csat_row = db.execute(
-            text(f"""
+            text("""
                 SELECT AVG(fr.csat_score) AS avg_csat
                 FROM fact_feedback_response fr
                 JOIN fact_feedback_request r ON r.id = fr.feedback_request_id
-                WHERE fr.csat_score IS NOT NULL {avg_scope_clause}
-            """),
-            params,
+                WHERE fr.csat_score IS NOT NULL
+                :avg_scope_clause
+            """.replace(":avg_scope_clause", avg_scope_clause)),
+            avg_params,
         ).fetchone()
         if avg_csat_row and avg_csat_row.avg_csat is not None:
             average_csat_score = round(float(avg_csat_row.avg_csat), 2)

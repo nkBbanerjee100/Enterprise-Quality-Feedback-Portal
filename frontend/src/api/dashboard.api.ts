@@ -6,7 +6,7 @@ import { DashboardData } from '../types/dashboard.types';
 
 export const dashboardApi = {
   getMetrics: async (): Promise<DashboardData> => {
-    const response = await api.get('/api/dashboard');
+    const response = await api.get('/api/dashboard/');
     return response.data;
   },
 
