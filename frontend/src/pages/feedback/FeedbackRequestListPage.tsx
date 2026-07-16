@@ -33,11 +33,11 @@ const RATING_LABELS: Record<string, string> = {
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 const STATUS_META: Record<string, { label: string; bg: string; color: string; dot: string }> = {
-  draft:     { label: 'Draft',     bg: '#F3F4F6', color: '#6B7280', dot: '#9CA3AF' },
-  pending:   { label: 'Pending',   bg: '#FDF6E3', color: '#9B7C2A', dot: '#F59E0B' },
-  sent:      { label: 'Sent',      bg: '#EEF4FF', color: '#2563EB', dot: '#3B82F6' },
+  draft: { label: 'Draft', bg: '#F3F4F6', color: '#6B7280', dot: '#9CA3AF' },
+  pending: { label: 'Pending', bg: '#FDF6E3', color: '#9B7C2A', dot: '#F59E0B' },
+  sent: { label: 'Sent', bg: '#EEF4FF', color: '#2563EB', dot: '#3B82F6' },
   completed: { label: 'Submitted', bg: '#E8F2EC', color: '#1A5C3A', dot: '#22C55E' },
-  expired:   { label: 'Expired',   bg: '#FEF2F2', color: '#DC2626', dot: '#EF4444' },
+  expired: { label: 'Expired', bg: '#FEF2F2', color: '#DC2626', dot: '#EF4444' },
   cancelled: { label: 'Cancelled', bg: '#F3F4F6', color: '#6B7280', dot: '#9CA3AF' },
 };
 
@@ -52,10 +52,10 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
 };
 
 const PM_STATUS_META: Record<string, { label: string; bg: string; color: string }> = {
-  draft:      { label: 'Draft',        bg: '#F3F4F6', color: '#6B7280' },
-  pending_pm: { label: 'Pending PM',   bg: '#FDF6E3', color: '#9B7C2A' },
-  approved:   { label: 'Approved',     bg: '#E8F2EC', color: '#1A5C3A' },
-  rejected:   { label: 'Rejected',     bg: '#FEF2F2', color: '#DC2626' },
+  draft: { label: 'Draft', bg: '#F3F4F6', color: '#6B7280' },
+  pending_pm: { label: 'Pending PM', bg: '#FDF6E3', color: '#9B7C2A' },
+  approved: { label: 'Approved', bg: '#E8F2EC', color: '#1A5C3A' },
+  rejected: { label: 'Rejected', bg: '#FEF2F2', color: '#DC2626' },
 };
 
 const PmStatusBadge: React.FC<{ status: string }> = ({ status }) => {
@@ -87,7 +87,7 @@ const StarRating: React.FC<{ value: string }> = ({ value }) => {
       <div style={{ display: 'flex', gap: 2 }}>
         {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(i => (
           <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill={i <= num ? '#F59E0B' : '#E5E7EB'} stroke="none">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
         ))}
       </div>
@@ -145,7 +145,7 @@ const ResponseDrawer: React.FC<{ requestId: number | null; onClose: () => void }
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: BRAND.textLight, padding: 4 }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
         </div>
@@ -254,21 +254,17 @@ const ResponseDrawer: React.FC<{ requestId: number | null; onClose: () => void }
 
 // ── PM Approval Modal ────────────────────────────────────────────────────────
 const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: () => void }> = ({ request, onClose, onSuccess }) => {
-  const [mode, setMode] = useState<'approve' | 'reject' | null>(null);
-  const [achievements, setAchievements] = useState('');
-  const [comments, setComments] = useState('');
+  const [mode, setMode] = useState<'approve' | null>(null); const [achievements, setAchievements] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
-    if (mode === 'approve' && !achievements.trim()) return alert("Achievements are required.");
-    if (mode === 'reject' && !comments.trim()) return alert("Rejection comments are required.");
+    if (!achievements.trim()) return alert("Achievements are required.");
+
     setLoading(true);
     try {
-      if (mode === 'approve') {
-        await api.post(`/api/feedback/requests/${request.id}/pm-approve`, { pmAchievements: achievements });
-      } else {
-        await api.post(`/api/feedback/requests/${request.id}/pm-reject`, { pmRejectionComments: comments });
-      }
+      await api.post(`/api/feedback/requests/${request.id}/pm-approve`, {
+        pmAchievements: achievements,
+      });
       onSuccess();
     } catch (err: any) {
       alert(err.response?.data?.detail || "An error occurred");
@@ -294,8 +290,7 @@ const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: 
           {!mode ? (
             <>
               <p style={{ margin: '0 0 20px', fontSize: 13, color: BRAND.textMid, lineHeight: 1.6 }}>
-                Please review the feedback form details below. You can <strong>approve</strong> it by adding your team's CSAT period achievements, or <strong>reject</strong> it with mandatory comments for the Quality Team to revise.
-              </p>
+                Please review the feedback form details below and add your team's achievements for the CSAT period.              </p>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
                 <div style={{ padding: 12, background: BRAND.surface, borderRadius: 8, border: `1px solid ${BRAND.border}` }}>
                   <p style={{ margin: '0 0 2px', fontSize: 10, fontWeight: 700, color: BRAND.textLight, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Project</p>
@@ -314,14 +309,13 @@ const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: 
               </div>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                 <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 7, border: `1px solid ${BRAND.border}`, background: '#fff', cursor: 'pointer', fontSize: 13, color: BRAND.textMid }}>Cancel</button>
-                <button onClick={() => setMode('reject')} style={{ padding: '8px 16px', borderRadius: 7, border: `1px solid #DC2626`, color: '#DC2626', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>✕ Reject with Comments</button>
-                <button onClick={() => setMode('approve')} style={{ padding: '8px 20px', borderRadius: 7, border: 'none', background: BRAND.green, color: '#fff', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>✓ Approve</button>
+                <button onClick={() => setMode('approve')} style={{ padding: '8px 20px', borderRadius: 7, border: 'none', background: BRAND.green, color: '#fff', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>Add Achievements</button>
               </div>
             </>
-          ) : mode === 'approve' ? (
+          ) : (
             <>
               <div style={{ marginBottom: 16, padding: '10px 14px', background: '#F0FDF4', borderRadius: 8, border: '1px solid #BBF7D0' }}>
-                <p style={{ margin: 0, fontSize: 12, color: '#15803D', fontWeight: 600 }}>✓ Approving feedback form for {request.projectName ?? `Project #${request.projectId}`}</p>
+                <p style={{ margin: 0, fontSize: 12, color: '#15803D', fontWeight: 600 }}>Add team achievements for {request.projectName ?? `Project #${request.projectId}`}</p>
               </div>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: BRAND.textDark, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Team's Achievements During CSAT Period *</label>
               <p style={{ margin: '0 0 8px', fontSize: 12, color: BRAND.textMid, lineHeight: 1.5 }}>These achievements will be pre-filled in the customer survey form (read-only for the customer).</p>
@@ -335,27 +329,7 @@ const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: 
               />
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
                 <button onClick={() => setMode(null)} style={{ padding: '8px 16px', borderRadius: 7, border: `1px solid ${BRAND.border}`, background: '#fff', cursor: 'pointer', fontSize: 13, color: BRAND.textMid }}>← Back</button>
-                <button onClick={handleSubmit} disabled={loading || !achievements.trim()} style={{ padding: '8px 24px', borderRadius: 7, border: 'none', background: achievements.trim() ? BRAND.green : '#D1D5DB', color: '#fff', cursor: achievements.trim() ? 'pointer' : 'not-allowed', fontWeight: 700, fontSize: 13 }}>{loading ? 'Submitting...' : '✓ Approve & Notify Quality'}</button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ marginBottom: 16, padding: '10px 14px', background: '#FEF2F2', borderRadius: 8, border: '1px solid #FECACA' }}>
-                <p style={{ margin: 0, fontSize: 12, color: '#DC2626', fontWeight: 600 }}>⚠ Rejecting — The Quality Team will be notified immediately</p>
-              </div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: BRAND.textDark, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reason for Rejection *</label>
-              <p style={{ margin: '0 0 8px', fontSize: 12, color: BRAND.textMid, lineHeight: 1.5 }}>Your comments will be sent to the Quality Team so they can update the form and resubmit for your approval.</p>
-              <textarea
-                rows={4}
-                value={comments}
-                onChange={e => setComments(e.target.value)}
-                placeholder="Explain what needs to be changed (e.g. wrong customer email, incorrect period, update the project details)..."
-                style={{ width: '100%', padding: '10px 12px', border: `1.5px solid #FECACA`, borderRadius: 8, boxSizing: 'border-box', fontSize: 13, lineHeight: 1.6, resize: 'vertical', outline: 'none', fontFamily: 'inherit' }}
-                autoFocus
-              />
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
-                <button onClick={() => setMode(null)} style={{ padding: '8px 16px', borderRadius: 7, border: `1px solid ${BRAND.border}`, background: '#fff', cursor: 'pointer', fontSize: 13, color: BRAND.textMid }}>← Back</button>
-                <button onClick={handleSubmit} disabled={loading || !comments.trim()} style={{ padding: '8px 24px', borderRadius: 7, border: 'none', background: comments.trim() ? '#DC2626' : '#D1D5DB', color: '#fff', cursor: comments.trim() ? 'pointer' : 'not-allowed', fontWeight: 700, fontSize: 13 }}>{loading ? 'Submitting...' : '✕ Reject & Notify Quality'}</button>
+                <button onClick={handleSubmit} disabled={loading || !achievements.trim()} style={{ padding: '8px 24px', borderRadius: 7, border: 'none', background: achievements.trim() ? BRAND.green : '#D1D5DB', color: '#fff', cursor: achievements.trim() ? 'pointer' : 'not-allowed', fontWeight: 700, fontSize: 13 }}>{loading ? 'Submitting...' : 'Submit & Notify Quality'}</button>
               </div>
             </>
           )}
@@ -400,7 +374,7 @@ const QualityReviewModal: React.FC<{ request: any; onClose: () => void; onSucces
               <p style={{ margin: '4px 0 0', fontSize: 12, color: 'rgba(255,255,255,0.8)' }}>Verify all details are correct before emailing the customer</p>
             </div>
             <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
             </button>
           </div>
         </div>
@@ -424,7 +398,7 @@ const QualityReviewModal: React.FC<{ request: any; onClose: () => void; onSucces
           {/* PM Achievements — read-only preview */}
           <div style={{ border: '1.5px solid #16a34a', borderRadius: 10, overflow: 'hidden' }}>
             <div style={{ background: '#F0FDF4', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #BBF7D0' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth="2" strokeLinecap="round"><path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth="2" strokeLinecap="round"><path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
               <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#15803D', textTransform: 'uppercase', letterSpacing: '0.08em' }}>PM Achievements (Pre-filled for Customer — Read Only)</p>
             </div>
             <div style={{ padding: '12px 14px', background: '#fff', minHeight: 60 }}>
@@ -503,7 +477,7 @@ const EditDraftModal: React.FC<{ request: any; onClose: () => void; onSuccess: (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: '100%', maxWidth: 500, boxShadow: '0 10px 25px rgba(0,0,0,0.1)' }}>
         <h3 style={{ margin: '0 0 8px', fontSize: 18 }}>Edit & Resubmit Draft</h3>
-        
+
         {request.pmRejectionComments && (
           <div style={{ padding: 12, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, marginBottom: 16 }}>
             <p style={{ fontSize: 12, fontWeight: 600, color: '#DC2626', margin: '0 0 4px' }}>PM Comments:</p>
@@ -550,7 +524,7 @@ export const FeedbackRequestListPage: React.FC = () => {
 
   const { data, isLoading, error, refetch } = useFeedbackRequests((page - 1) * pageSize, pageSize);
 
-  const rows  = data?.data ?? [];
+  const rows = data?.data ?? [];
   const total = data?.total ?? 0;
 
   return (
@@ -576,7 +550,7 @@ export const FeedbackRequestListPage: React.FC = () => {
               style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 18px', background: BRAND.green, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
               Create Feedback Form
             </button>
@@ -596,10 +570,10 @@ export const FeedbackRequestListPage: React.FC = () => {
           {!isLoading && rows.length > 0 && (
             <div style={{ padding: '10px 20px', borderBottom: `1px solid ${BRAND.border}`, display: 'flex', gap: 24, background: BRAND.surface }}>
               {[
-                { label: 'Sent',      count: rows.filter((r: any) => r.status === 'sent').length,      dot: '#3B82F6' },
-                { label: 'Submitted', count: rows.filter((r: any) => r.status === 'completed').length,  dot: '#22C55E' },
-                { label: 'Pending',   count: rows.filter((r: any) => r.status === 'pending').length,    dot: '#F59E0B' },
-                { label: 'Expired',   count: rows.filter((r: any) => r.status === 'expired').length,    dot: '#EF4444' },
+                { label: 'Sent', count: rows.filter((r: any) => r.status === 'sent').length, dot: '#3B82F6' },
+                { label: 'Submitted', count: rows.filter((r: any) => r.status === 'completed').length, dot: '#22C55E' },
+                { label: 'Pending', count: rows.filter((r: any) => r.status === 'pending').length, dot: '#F59E0B' },
+                { label: 'Expired', count: rows.filter((r: any) => r.status === 'expired').length, dot: '#EF4444' },
               ].map(({ label, count, dot }) => (
                 <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
                   <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot }} />
@@ -706,7 +680,7 @@ export const FeedbackRequestListPage: React.FC = () => {
                             style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', background: BRAND.greenMuted, color: BRAND.green, border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', marginLeft: 8 }}
                           >
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
                             </svg>
                             View
                           </button>
@@ -729,7 +703,7 @@ export const FeedbackRequestListPage: React.FC = () => {
 
       {/* Response drawer */}
       <ResponseDrawer requestId={selectedId} onClose={() => setSelectedId(null)} />
-      
+
       {/* PM Approval Modal */}
       {pmReviewRequest && (
         <PMApprovalModal
