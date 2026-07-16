@@ -33,13 +33,18 @@ def log_action(
     commit: bool = True,
 ) -> None:
     try:
+        final_entity_type = entity_type or "USER"
+        final_entity_id = str(entity_id) if entity_id is not None else None
+        if final_entity_type == "USER" and final_entity_id is None and actor_emp_id is not None:
+            final_entity_id = str(actor_emp_id)
+
         entry = AuditLog(
             actor_emp_id=actor_emp_id,
             actor_name=actor_name,
             actor_role=actor_role,
             action=action,
-            entity_type=entity_type,
-            entity_id=str(entity_id) if entity_id is not None else None,
+            entity_type=final_entity_type,
+            entity_id=final_entity_id,
             details=json.dumps(details, default=str) if details else None,
             ip_address=ip_address,
             user_agent=user_agent,

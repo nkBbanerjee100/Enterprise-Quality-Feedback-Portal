@@ -6,7 +6,7 @@ import { Notification, NotificationListResponse } from '../types/notification.ty
 
 export const notificationsApi = {
   list: async (unreadOnly = false, skip = 0, limit = 50): Promise<NotificationListResponse> => {
-    const r = await api.get('/api/notifications', { params: { unread_only: unreadOnly, skip, limit } });
+    const r = await api.get('/api/notifications/', { params: { unread_only: unreadOnly, skip, limit } });
     return r.data;
   },
 

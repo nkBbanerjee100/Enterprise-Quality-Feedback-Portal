@@ -35,9 +35,7 @@ class AuditLog(Base):
     # The actual FK constraint still exists at the DB level (added directly
     # via migrations/add_audit_logs.sql), which is all that's needed for
     # referential integrity — SQLAlchemy just doesn't need to be aware of it.
-    actor_emp_id: Mapped[str | None] = mapped_column(
-        String(100, collation="utf8mb4_unicode_ci"), nullable=True, index=True
-    )
+    actor_emp_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     actor_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     actor_role: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
