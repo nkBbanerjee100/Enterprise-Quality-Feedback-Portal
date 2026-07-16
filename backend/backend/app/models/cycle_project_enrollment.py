@@ -23,13 +23,40 @@ class EligibilityStatus(str, enum.Enum):
 class AdditionApprovalStatus(str, enum.Enum):
     """
     Separate from EligibilityStatus / the exemption-approval flow above.
-    Gates the *addition* of a project to a cycle: whenever Quality/Management
-    enrolls a project, Management + the project's Manager (PM) are notified
-    and must approve the addition itself before it's considered confirmed.
+    Gates the *addition* of a project to a cycle — mirrors the exact same
+    Quality -> Manager -> Quality -> Management chain as the pre-cycle
+    project_staging pool (see app/models/project_staging.py), just scoped
+    to a project being added to an ALREADY-EXISTING cycle instead:
+
+      Quality/Management enrolls a project:
+        eligible -> pending_manager_review (project's own Manager reviews)
+        exempted -> mandatory reason; pending_management_exemption_review
+                    (Management approves/rejects the exemption)
+      Management decides an exemption request:
+        approve -> final DECLINED
+        reject  -> pending_manager_review (now eligible; PM reviews)
+      The project's Manager decides (pending_manager_review):
+        eligible -> final APPROVED — no further review needed
+        exempted -> mandatory reason; pending_quality_recheck
+      Quality rechecks (pending_quality_recheck):
+        exempted -> mandatory reason; final DECLINED
+        eligible -> pending_management_review
+      Management's final call (pending_management_review):
+        approve -> final APPROVED
+        decline -> mandatory reason; final DECLINED
+
+    A Manager adding one of their OWN projects directly (see enroll_projects)
+    skips this whole chain — instantly APPROVED, no review needed.
     """
+    PENDING_MANAGEMENT_EXEMPTION_REVIEW = "pending_management_exemption_review"
+    PENDING_MANAGER_REVIEW = "pending_manager_review"
+    PENDING_QUALITY_RECHECK = "pending_quality_recheck"
+    PENDING_MANAGEMENT_REVIEW = "pending_management_review"
+    APPROVED = "approved"   # final — added to the cycle
+    DECLINED = "declined"   # final — excluded (eligibility_status becomes EXEMPTED)
+    # Legacy value — no longer set by new code, kept only so pre-existing
+    # rows from before this chain existed still deserialize/display fine.
     PENDING = "pending"
-    APPROVED = "approved"
-    DECLINED = "declined"
 
 
 class CycleProjectEnrollment(Base):
@@ -67,6 +94,14 @@ class CycleProjectEnrollment(Base):
     addition_approved_by = Column(String(50), nullable=True)   # emp_id of Management/Manager who decided
     addition_approved_at = Column(DateTime, nullable=True)
     addition_decision_remarks = Column(Text, nullable=True)
+
+    # ── Chain-tracking columns — mirror project_staging's Manager/Quality
+    #    recheck fields exactly, same purpose here. ─────────────────────────
+    manager_emp_id = Column(String(50), nullable=True)         # the project's assigned Manager (TMS PmId), cached
+    manager_decided_by = Column(String(50), nullable=True)
+    manager_decided_at = Column(DateTime, nullable=True)
+    quality_recheck_by = Column(String(50), nullable=True)
+    quality_recheck_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
         return f"<CycleProjectEnrollment cycle={self.cycle_id} project={self.project_id} status={self.eligibility_status}>"

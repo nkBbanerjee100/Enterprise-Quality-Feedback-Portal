@@ -795,16 +795,35 @@ def verify_survey_token(
 # ── Public survey endpoints (no auth) ──────────────────────────────────────────
 
 @router.get("/public/{token}")
-def get_survey_by_token(token: str, db: Session = Depends(get_local_db), tms_db: Session = Depends(get_tms_db)):
+def get_survey_by_token(
+    token: str,
+    email: str = Query(..., description="Recipient email, must match the token's fact_feedback_request row."),
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+):
     """Return full survey context for the customer-facing page, including the
     PM's achievements (read-only, pre-filled) for 'Overview on Project
-    Performance'."""
+    Performance'.
+
+    Requires the recipient's email as well as the token. SurveyAccessPage.tsx
+    already verifies email+token together via /verify-token before it
+    navigates here — but that was only a client-side redirect. Anyone who
+    obtained just the token (a plain 12-char string, easy to share/leak) could
+    previously open /survey/{token} directly and skip that check entirely,
+    since this endpoint only ever validated the token, never who was holding
+    it. Requiring the matching email here too closes that bypass at the only
+    layer that actually matters — the server."""
     row = db.execute(
         text("SELECT * FROM fact_feedback_request WHERE token = :token LIMIT 1"),
         {"token": token},
     ).fetchone()
 
     if not row:
+        raise HTTPException(status_code=404, detail="Invalid survey link.")
+    if row.recipient_email.strip().lower() != email.strip().lower():
+        # Deliberately the same generic message as "not found" — confirming
+        # a token exists but the email doesn't match would let someone
+        # enumerate/guess which email a given leaked token belongs to.
         raise HTTPException(status_code=404, detail="Invalid survey link.")
     if row.status == "completed":
         raise HTTPException(status_code=409, detail="This feedback has already been submitted.")
@@ -831,17 +850,28 @@ def get_survey_by_token(token: str, db: Session = Depends(get_local_db), tms_db:
 
 
 @router.post("/public/{token}/submit", status_code=status.HTTP_201_CREATED)
-def submit_survey(token: str, body: SurveySubmitPayload, db: Session = Depends(get_local_db)):
+def submit_survey(
+    token: str,
+    body: SurveySubmitPayload,
+    email: str = Query(..., description="Recipient email, must match the token's fact_feedback_request row."),
+    db: Session = Depends(get_local_db),
+):
     """
-    Validate token, save the customer's full survey response to
-    fact_feedback_response.response_data, mark request completed.
+    Validate token AND recipient email, save the customer's full survey
+    response to fact_feedback_response.response_data, mark request completed.
+
+    Same email requirement as GET /public/{token} above, for the same
+    reason — a leaked/guessed token alone must not be enough to submit on
+    someone else's behalf.
     """
     req_row = db.execute(
-        text("SELECT id, status, expires_at FROM fact_feedback_request WHERE token = :token LIMIT 1"),
+        text("SELECT id, status, expires_at, recipient_email FROM fact_feedback_request WHERE token = :token LIMIT 1"),
         {"token": token},
     ).fetchone()
 
     if not req_row:
+        raise HTTPException(status_code=404, detail="Invalid survey link.")
+    if req_row.recipient_email.strip().lower() != email.strip().lower():
         raise HTTPException(status_code=404, detail="Invalid survey link.")
     if req_row.status == "completed":
         raise HTTPException(status_code=409, detail="This feedback has already been submitted.")

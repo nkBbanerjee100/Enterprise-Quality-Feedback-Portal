@@ -5,7 +5,7 @@ import { api } from './client';
 import { CSATCycle, PaginatedResponse } from '../types/common.types';
 import {
   EnrolledProject, EnrollProjectsRequest, SetEligibilityRequest,
-  CycleProjectsResponse, DeclineAdditionRequest,
+  CycleProjectsResponse, DeclineAdditionRequest, EnrollTriageAction,
 } from '../types/csat-cycle.types';
 
 export const csatCyclesApi = {
@@ -59,7 +59,7 @@ export const csatCyclesApi = {
   enrollProjects: async (
     cycleId: number,
     payload: EnrollProjectsRequest,
-  ): Promise<{ enrolled: number[]; skipped: { tms_project_id: number; reason: string }[] }> => {
+  ): Promise<{ enrolled: number[]; skipped: { tms_project_id: number; reason: string }[]; warnings: { tms_project_id: number; reason: string }[] }> => {
     const r = await api.post(`/api/csat-cycles/${cycleId}/projects/enroll`, payload);
     return r.data;
   },
@@ -92,6 +92,39 @@ export const csatCyclesApi = {
     payload: DeclineAdditionRequest = {},
   ): Promise<EnrolledProject> => {
     const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/decline-addition`, payload);
+    return r.data;
+  },
+
+  /** The project's own Manager reviewing an enrollment sitting in
+   * pending_manager_review. exempted requires a reason and sends it back
+   * to Quality to recheck; eligible is final. */
+  managerDecide: async (
+    cycleId: number, enrollmentId: number, decision: EnrollTriageAction, exemptionReason?: string,
+  ): Promise<EnrolledProject> => {
+    const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/manager-decide`, {
+      decision, exemption_reason: exemptionReason,
+    });
+    return r.data;
+  },
+
+  /** Quality rechecking an enrollment the Manager just exempted. exempted
+   * requires a reason and is final; eligible sends it to Management. */
+  qualityRecheck: async (
+    cycleId: number, enrollmentId: number, decision: EnrollTriageAction, exemptionReason?: string,
+  ): Promise<EnrolledProject> => {
+    const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/quality-recheck`, {
+      decision, exemption_reason: exemptionReason,
+    });
+    return r.data;
+  },
+
+  /** Management approving/rejecting Quality's exemption request. Reject
+   * sends the project on to its Manager (or straight to Approved if it has
+   * no Manager) instead of finalizing it as exempt. */
+  decideExemption: async (
+    cycleId: number, enrollmentId: number, approve: boolean, remarks?: string,
+  ): Promise<EnrolledProject> => {
+    const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/decide-exemption`, { approve, remarks });
     return r.data;
   },
 

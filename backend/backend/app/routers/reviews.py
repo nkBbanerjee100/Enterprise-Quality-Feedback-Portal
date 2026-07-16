@@ -6,20 +6,31 @@ represent "something is waiting on Management's decision", and nothing ties
 them together for the person who has to act on both:
 
   1. Pre-cycle staging (project_staging table) — Quality triages TMS
-     candidates before any cycle exists. A "not sure" triage sets
-     status='pending_management_review', resolved via
-     POST /api/project-staging/{staging_id}/decide.
+     candidates before any cycle exists.
+  2. Cycle-level addition (cycle_project_enrollments table) — a project
+     added to an ALREADY-EXISTING cycle via "+Add Projects".
 
-  2. Cycle-level addition approval (cycle_project_enrollments table) — a
-     project added to an ALREADY-EXISTING cycle via "+Add Projects".
-     A "not sure" triage there sets addition_approval_status='pending',
-     resolved via POST /api/csat-cycles/{cycle_id}/projects/{enrollment_id}
-     /approve-addition or /decline-addition.
+Both now follow the identical Quality -> Manager -> Quality -> Management
+chain (see app/models/project_staging.py and
+app/models/cycle_project_enrollment.py for the full state machine).
+Management has a say at exactly two points in that chain, and this endpoint
+surfaces both, tagged with `action_type` so the frontend calls the right
+endpoint for each:
 
-Management previously had to know both of these existed and check both
-pages separately. This endpoint merges both into one flat, chronological
-list; the frontend acts on each item using its `source` field to call the
-right existing decide-endpoint — no new decision logic here, just aggregation.
+  - action_type='exemption' — Quality's initial exempt request, awaiting
+    approve/reject. Staging: POST /api/project-staging/{id}/decide-exemption.
+    Cycle: POST /api/csat-cycles/{cycle_id}/projects/{id}/decide-exemption.
+  - action_type='final' — Quality reaffirmed eligible after a Manager
+    exemption; Management's decision here is final.
+    Staging: POST /api/project-staging/{id}/decide.
+    Cycle: POST /api/csat-cycles/{cycle_id}/projects/{id}/approve-addition
+    or /decline-addition.
+
+Management previously had to know both of these systems existed and check
+both pages separately. This endpoint merges both into one flat,
+chronological list; the frontend acts on each item using its `source` and
+`action_type` fields to call the right existing decide-endpoint — no new
+decision logic here, just aggregation.
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -33,6 +44,16 @@ from app.models.cycle_project_enrollment import CycleProjectEnrollment, Addition
 from app.models.csat_cycle import CSATCycle
 
 router = APIRouter()
+
+# The two staging statuses Management has a decision on, and the two
+# matching cycle-enrollment statuses (identical literal values by design —
+# see the state-machine docstrings on both models).
+_STAGING_MGMT_STATUSES = (StagingStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW, StagingStatus.PENDING_MANAGEMENT_REVIEW)
+_ENROLLMENT_MGMT_STATUSES = (AdditionApprovalStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW, AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW)
+
+
+def _action_type(status_value: str) -> str:
+    return "exemption" if status_value == "pending_management_exemption_review" else "final"
 
 
 def _resolve_names(db: Session, emp_ids: list[str]) -> dict[str, str]:
@@ -59,13 +80,13 @@ def list_pending_reviews(
     current_user: dict = Depends(require_role("MANAGEMENT")),
 ):
     """Everything currently awaiting Management's decision, merged from both
-    the pre-cycle staging pool and every cycle's addition-approval queue.
+    the pre-cycle staging pool and every cycle's addition queue.
     Sorted oldest-first — whatever's been waiting longest surfaces first."""
 
     staging_rows = (
         db.query(ProjectStaging, Project)
         .join(Project, Project.id == ProjectStaging.project_id)
-        .filter(ProjectStaging.status == StagingStatus.PENDING_MANAGEMENT_REVIEW)
+        .filter(ProjectStaging.status.in_(_STAGING_MGMT_STATUSES))
         .all()
     )
 
@@ -73,7 +94,7 @@ def list_pending_reviews(
         db.query(CycleProjectEnrollment, Project, CSATCycle)
         .join(Project, Project.id == CycleProjectEnrollment.project_id)
         .join(CSATCycle, CSATCycle.id == CycleProjectEnrollment.cycle_id)
-        .filter(CycleProjectEnrollment.addition_approval_status == AdditionApprovalStatus.PENDING)
+        .filter(CycleProjectEnrollment.addition_approval_status.in_(_ENROLLMENT_MGMT_STATUSES))
         .all()
     )
 
@@ -87,6 +108,7 @@ def list_pending_reviews(
     for s, project in staging_rows:
         items.append({
             "source":         "staging",
+            "action_type":    _action_type(s.status.value if hasattr(s.status, "value") else s.status),
             "id":             s.id,
             "cycle_id":       None,
             "cycle_name":     None,
@@ -96,10 +118,12 @@ def list_pending_reviews(
             "is_active":      project.is_active,
             "requested_by":   name_map.get(s.selected_by, s.selected_by),
             "requested_at":   s.selected_at,
+            "exemption_reason": s.exemption_reason,
         })
     for e, project, cycle in enrollment_rows:
         items.append({
             "source":         "cycle_addition",
+            "action_type":    _action_type(e.addition_approval_status.value if hasattr(e.addition_approval_status, "value") else e.addition_approval_status),
             "id":             e.id,
             "cycle_id":       cycle.id,
             "cycle_name":     cycle.cycle_name,
@@ -109,6 +133,7 @@ def list_pending_reviews(
             "is_active":      project.is_active,
             "requested_by":   name_map.get(e.enrolled_by, e.enrolled_by) if e.enrolled_by else None,
             "requested_at":   e.enrolled_at,
+            "exemption_reason": e.exemption_reason,
         })
 
     items.sort(key=lambda i: i["requested_at"])
@@ -128,12 +153,12 @@ def pending_review_count(
     full list doesn't need to be fetched just to show a number."""
     staging_count = (
         db.query(ProjectStaging)
-        .filter(ProjectStaging.status == StagingStatus.PENDING_MANAGEMENT_REVIEW)
+        .filter(ProjectStaging.status.in_(_STAGING_MGMT_STATUSES))
         .count()
     )
     enrollment_count = (
         db.query(CycleProjectEnrollment)
-        .filter(CycleProjectEnrollment.addition_approval_status == AdditionApprovalStatus.PENDING)
+        .filter(CycleProjectEnrollment.addition_approval_status.in_(_ENROLLMENT_MGMT_STATUSES))
         .count()
     )
     return {"count": staging_count + enrollment_count}

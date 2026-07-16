@@ -25,10 +25,15 @@ class EligibilityStatus(str, Enum):
 
 
 class AdditionApprovalStatus(str, Enum):
-    """Separate from EligibilityStatus — gates adding a project to a cycle at all."""
-    PENDING = "pending"
+    """Separate from EligibilityStatus — gates adding a project to a cycle
+    at all. Mirrors the exact chain in app/models/cycle_project_enrollment.py."""
+    PENDING_MANAGEMENT_EXEMPTION_REVIEW = "pending_management_exemption_review"
+    PENDING_MANAGER_REVIEW = "pending_manager_review"
+    PENDING_QUALITY_RECHECK = "pending_quality_recheck"
+    PENDING_MANAGEMENT_REVIEW = "pending_management_review"
     APPROVED = "approved"
     DECLINED = "declined"
+    PENDING = "pending"   # legacy — no longer set by new code
 
 
 # ─── CSAT Cycle CRUD ──────────────────────────────────────────────────────────
@@ -72,6 +77,7 @@ class EnrolledProjectResponse(BaseModel):
     eligibility_status: EligibilityStatus
     exemption_reason: Optional[str]
     notes: Optional[str]
+    enrolled_by: Optional[str] = None
     enrolled_at: datetime
     approval_requested_at: Optional[datetime]
     manager_remarks: Optional[str]
@@ -86,6 +92,20 @@ class EnrolledProjectResponse(BaseModel):
     project_manager_name: Optional[str] = None
     can_approve_addition: bool = False   # computed per-request based on the caller
 
+    # ── Chain tracking — mirrors project_staging's fields exactly ──────────
+    manager_emp_id: Optional[str] = None
+    manager_decided_by: Optional[str] = None
+    manager_decided_at: Optional[datetime] = None
+    quality_recheck_by: Optional[str] = None
+    quality_recheck_at: Optional[datetime] = None
+
+    # ── Feedback — whether a survey has already gone out/come back for
+    # this project in THIS cycle, so the UI can stop offering to re-send
+    # once a customer has actually submitted it. ───────────────────────────
+    feedback_request_id: Optional[int] = None
+    feedback_status: Optional[str] = None       # 'draft' | 'sent' | 'completed' | 'expired' | 'cancelled'
+    pm_approval_status: Optional[str] = None     # 'pending_pm' | 'approved' | 'rejected'
+
     class Config:
         from_attributes = True
 
@@ -96,9 +116,46 @@ class DeclineAdditionRequest(BaseModel):
 
 # ─── Enrollment actions ───────────────────────────────────────────────────────
 
+class EnrollTriageAction(str, Enum):
+    """What Quality/Management decides for each project being enrolled —
+    mirrors project_staging.TriageAction exactly."""
+    ELIGIBLE = "eligible"
+    EXEMPTED = "exempted"
+
+
+class EnrollProjectItem(BaseModel):
+    tms_project_id: int
+    action: EnrollTriageAction = EnrollTriageAction.ELIGIBLE
+    exemption_reason: Optional[str] = None   # required when action == exempted
+
+
 class EnrollProjectsRequest(BaseModel):
-    """Enroll one or more projects into a cycle"""
-    tms_project_ids: List[int]      # TMS tsms_projects.Id list (auto-synced to dim_projects)
+    """Enroll one or more projects into a cycle. `items` is the modern
+    per-project eligible/exempt form (mirrors project_staging's /select);
+    `tms_project_ids` is kept as a fallback for simple all-eligible adds
+    (e.g. a Manager adding their own project) — provide exactly one of the
+    two."""
+    tms_project_ids: Optional[List[int]] = None
+    items: Optional[List[EnrollProjectItem]] = None
+
+
+class ManagerCycleDecisionRequest(BaseModel):
+    """The project's own Manager deciding an enrollment sitting in
+    pending_manager_review."""
+    decision: EnrollTriageAction
+    exemption_reason: Optional[str] = None   # required when decision == exempted
+
+
+class QualityCycleRecheckRequest(BaseModel):
+    """Quality rechecking an enrollment the Manager just exempted."""
+    decision: EnrollTriageAction
+    exemption_reason: Optional[str] = None   # required when decision == exempted
+
+
+class ManagementCycleExemptionDecisionRequest(BaseModel):
+    """Management approving/rejecting Quality's initial exemption request."""
+    approve: bool
+    remarks: Optional[str] = None
 
 
 class SetEligibilityRequest(BaseModel):

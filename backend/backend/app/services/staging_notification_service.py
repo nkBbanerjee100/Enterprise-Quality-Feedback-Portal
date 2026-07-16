@@ -32,6 +32,14 @@ def _get_user_by_emp_id(local_db: Session, emp_id: str) -> Optional[dict]:
     return dict(row._mapping) if row else None
 
 
+def _get_users_by_role(local_db: Session, role: str) -> list[dict]:
+    rows = local_db.execute(
+        text("SELECT EmpId AS emp_id, Email AS email, EmpFirstName AS first_name FROM csat_users WHERE role = :role AND is_active = 1"),
+        {"role": role},
+    ).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
 def notify_management_project_needs_review(
     *,
     local_db: Session,
@@ -125,6 +133,246 @@ def notify_quality_of_decision(
                 )
             except Exception as e:
                 print(f"[WARN] Failed to email {selected_by_emp_id} about staging decision: {e}")
+
+    local_db.flush()
+
+
+def notify_management_exemption_request(
+    *,
+    local_db: Session,
+    project_name: str,
+    project_id: int,
+    staging_id: int,
+    selected_by_name: str,
+    exemption_reason: str,
+    actor_emp_id: str,
+) -> None:
+    """Broadcast to everyone with role MANAGEMENT that Quality has requested
+    a project be exempted, and it needs their approve/reject decision."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "An exemption request needs your decision"
+    message = (
+        f'{selected_by_name} requested "{project_name}" be exempted from the next '
+        f'CSAT cycle: "{exemption_reason}". Please approve or reject the exemption.'
+    )
+
+    local_db.add(Notification(
+        recipient_role="MANAGEMENT",
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_EXEMPTION_REQUEST",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,   # reused field — staging_id here, not a cycle enrollment
+        link=link,
+    ))
+
+    for mgmt_user in get_management_users(local_db):
+        if EMAIL_NOTIFICATIONS_ENABLED and mgmt_user.get("email"):
+            try:
+                EmailSender.send_email(
+                    to=mgmt_user["email"],
+                    subject=title,
+                    body=f"{message}\n\nDecide here: {link}",
+                    html_content=f"<p>{message}</p><p><a href='{link}'>Decide</a></p>",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to email management user {mgmt_user.get('emp_id')}: {e}")
+
+    local_db.flush()
+
+
+def notify_quality_of_exemption_decision(
+    *,
+    local_db: Session,
+    project_name: str,
+    project_id: int,
+    staging_id: int,
+    selected_by_emp_id: str,   # who requested the exemption — the recipient here
+    exemption_approved: bool,  # True = confirmed exempt; False = rejected, now eligible
+    decided_by_name: str,
+    actor_emp_id: str,
+    remarks: Optional[str] = None,
+) -> None:
+    """Notify the Quality user who requested an exemption once Management
+    has approved or rejected it."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    outcome = (
+        "approved the exemption — it's now marked exempt" if exemption_approved
+        else "rejected the exemption — it's now eligible and has been sent to its Manager for review"
+    )
+    title = "Your exemption request was reviewed"
+    message = f'{decided_by_name} {outcome} for "{project_name}".'
+    if remarks:
+        message += f' Remarks: "{remarks}"'
+
+    local_db.add(Notification(
+        recipient_emp_id=selected_by_emp_id,
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_EXEMPTION_DECIDED",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,
+        link=link,
+    ))
+
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, selected_by_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(
+                    to=recipient["email"],
+                    subject=title,
+                    body=f"{message}\n\nSee it here: {link}",
+                    html_content=f"<p>{message}</p><p><a href='{link}'>View it</a></p>",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to email {selected_by_emp_id} about exemption decision: {e}")
+
+    local_db.flush()
+
+
+def notify_manager_project_needs_review(
+    *,
+    local_db: Session,
+    manager_emp_id: str,
+    project_name: str,
+    project_id: int,
+    staging_id: int,
+    selected_by_name: str,
+    actor_emp_id: str,
+) -> None:
+    """Notify the project's own Manager that Quality marked their project
+    eligible and it now needs their review — the one step in this whole
+    flow that's ever targeted at a specific PM rather than a role."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "A project of yours needs your review"
+    message = (
+        f'{selected_by_name} marked "{project_name}" as eligible for the next '
+        f"CSAT cycle. As its Manager, please review and mark it Eligible or Exempt."
+    )
+
+    local_db.add(Notification(
+        recipient_emp_id=manager_emp_id,
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_NEEDS_MANAGER_REVIEW",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,   # reused field — staging_id here, not a cycle enrollment
+        link=link,
+    ))
+
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, manager_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(
+                    to=recipient["email"],
+                    subject=title,
+                    body=f"{message}\n\nReview it here: {link}",
+                    html_content=f"<p>{message}</p><p><a href='{link}'>Review it</a></p>",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to email manager {manager_emp_id} about staging review: {e}")
+
+    local_db.flush()
+
+
+def notify_quality_project_needs_recheck(
+    *,
+    local_db: Session,
+    project_name: str,
+    project_id: int,
+    staging_id: int,
+    selected_by_emp_id: str,   # the Quality user who originally triaged it — the recipient here
+    manager_name: str,
+    exemption_reason: str,
+    actor_emp_id: str,
+) -> None:
+    """Notify the Quality user who originally marked a project eligible
+    that its Manager has since exempted it (with a mandatory reason), and
+    it's back with Quality to recheck — Exempt (final) or Eligible (goes
+    on to Management)."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "A project's Manager marked it exempt — please recheck"
+    message = (
+        f'{manager_name} marked "{project_name}" exempt: "{exemption_reason}". '
+        f"Please recheck — Exempt to finalize, or Eligible to send it on to Management."
+    )
+
+    local_db.add(Notification(
+        recipient_emp_id=selected_by_emp_id,
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_NEEDS_QUALITY_RECHECK",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,
+        link=link,
+    ))
+
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, selected_by_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(
+                    to=recipient["email"],
+                    subject=title,
+                    body=f"{message}\n\nRecheck it here: {link}",
+                    html_content=f"<p>{message}</p><p><a href='{link}'>Recheck it</a></p>",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to email {selected_by_emp_id} about quality recheck: {e}")
+
+    local_db.flush()
+
+
+def notify_quality_role_project_needs_recheck(
+    *,
+    local_db: Session,
+    project_name: str,
+    project_id: int,
+    staging_id: int,
+    manager_name: str,
+    exemption_reason: str,
+    actor_emp_id: str,
+) -> None:
+    """Same as notify_quality_project_needs_recheck, but broadcast to
+    everyone with role QUALITY instead of one specific person — used when a
+    Manager self-initiates (see manager_select_projects in
+    project_staging.py), so there's no original Quality submitter to
+    target directly."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "A project's Manager marked it exempt — please recheck"
+    message = (
+        f'{manager_name} marked "{project_name}" exempt: "{exemption_reason}". '
+        f"Please recheck — Exempt to finalize, or Eligible to send it on to Management."
+    )
+
+    local_db.add(Notification(
+        recipient_role="QUALITY",
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_NEEDS_QUALITY_RECHECK",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,
+        link=link,
+    ))
+
+    for quality_user in _get_users_by_role(local_db, "QUALITY"):
+        if EMAIL_NOTIFICATIONS_ENABLED and quality_user.get("email"):
+            try:
+                EmailSender.send_email(
+                    to=quality_user["email"],
+                    subject=title,
+                    body=f"{message}\n\nRecheck it here: {link}",
+                    html_content=f"<p>{message}</p><p><a href='{link}'>Recheck it</a></p>",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to email quality user {quality_user.get('emp_id')}: {e}")
 
     local_db.flush()
 

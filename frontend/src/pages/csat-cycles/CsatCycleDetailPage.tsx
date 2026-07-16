@@ -18,6 +18,20 @@ import { currentHalf, precedingHalf, halfDates } from '../../utils/half-year';
 
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 
+// ─── Mandatory exemption reason — same small blocking prompt used
+// throughout SelectProjectsPage.tsx for every "Exempt" action anywhere in
+// the chain. Kept as one function rather than a modal per call site. ──────
+function askExemptionReason(projectName: string): string | null {
+  const reason = window.prompt(`Exemption reason for "${projectName}" (required):`);
+  if (reason === null) return null; // cancelled
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    window.alert('An exemption reason is required to mark a project exempt.');
+    return null;
+  }
+  return trimmed;
+}
+
 // ─── Unified row status ─────────────────────────────────────────────────────
 // A project row has two underlying flags — addition_approval_status and
 // eligibility_status — but a person looking at this page just wants to know
@@ -28,8 +42,14 @@ const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 // its eligibility surfaced too).
 type RowStatus = 'review' | 'ready' | 'not-eligible';
 
+const _PENDING_ADDITION_STATUSES = new Set([
+  'pending', // legacy
+  'pending_management_exemption_review', 'pending_manager_review',
+  'pending_quality_recheck', 'pending_management_review',
+]);
+
 function getRowStatus(p: EnrolledProject): RowStatus {
-  if (p.addition_approval_status === 'pending') return 'review';
+  if (_PENDING_ADDITION_STATUSES.has(p.addition_approval_status)) return 'review';
   if (p.eligibility_status === 'eligible' || p.eligibility_status === 'approved') return 'ready';
   if (p.eligibility_status === 'pending_approval') return 'review';  // merged — "With manager" removed as its own bucket
   return 'not-eligible'; // exempted, declined
@@ -120,12 +140,16 @@ function EnrollModal({
   onTriaged: () => void;   // refresh the parent's enrolled set without closing the modal
 }) {
   const { user } = useAuthStore();
-  const isManagement = user?.role === UserRole.MANAGEMENT;
+  // A Manager can only ever add their OWN projects (TMS PmId match) —
+  // enforced server-side too (see enroll_projects), but filtering here
+  // avoids showing them a list full of projects they'll just get a
+  // "skipped" response for.
+  const isManagerRole = user?.role === UserRole.MANAGER;
   const [search, setSearch] = useState('');
   const [pmFilter, setPmFilter] = useState('');
   const [yearFilter, setYearFilter] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [tally, setTally] = useState({ eligible: 0, not_sure: 0, exempted: 0 });
+  const [tally, setTally] = useState({ eligible: 0, exempted: 0 });
 
   // Keyed on cycleId only — NOT enrolledIds.size. enrolledIds.size changes
   // by +1 every time a project is triaged, and using it here meant React
@@ -135,8 +159,8 @@ function EnrollModal({
   // filtering the already-fetched data against the (reactively updated)
   // enrolledIds prop. No network round-trip needed for that at all.
   const { data, isLoading } = useQuery({
-    queryKey: ['projects-for-enroll', cycleId],
-    queryFn: () => projectsApi.list(0, 500, undefined, undefined, undefined, undefined, false),
+    queryKey: ['projects-for-enroll', cycleId, isManagerRole ? user?.emp_id : null],
+    queryFn: () => projectsApi.list(0, 500, undefined, undefined, isManagerRole ? user?.emp_id : undefined, undefined, false),
     staleTime: 5 * 60 * 1000, // one fetch per modal session is enough — re-opening the modal remounts it anyway
   });
 
@@ -154,7 +178,7 @@ function EnrollModal({
     const available = projects.filter((p: any) =>
       !enrolledIds.has(p.project_id) &&
       (search === '' || p.project_name.toLowerCase().includes(search.toLowerCase())) &&
-      (pmFilter === '' || p.project_manager_emp_id === pmFilter) &&
+      (isManagerRole || pmFilter === '' || p.project_manager_emp_id === pmFilter) &&
       (yearFilter === '' || (p.start_date && new Date(p.start_date).getFullYear() === Number(yearFilter)))
     );
     const active: any[] = [];
@@ -180,46 +204,31 @@ function EnrollModal({
     active.sort((a, b) => a.project_name.localeCompare(b.project_name));
     completed.sort((a, b) => a.project_name.localeCompare(b.project_name));
     return { activeProjects: active, completedProjects: completed };
-  }, [data, enrolledIds, search, pmFilter, yearFilter]);
+  }, [data, enrolledIds, search, pmFilter, yearFilter, isManagerRole, user?.emp_id]);
 
   const totalFiltered = activeProjects.length + completedProjects.length;
 
-  // Enroll first (creates the cycle_project_enrollment row — still goes
-  // through the existing addition-approval flow to Management/PM exactly
-  // as before), then look up the enrollment_id that came out of it so we
-  // can immediately apply the triage decision on top of it.
-  const [lastAction, setLastAction] = useState<{ id: number; name: string; action: 'eligible' | 'not_sure' | 'exempted' } | null>(null);
+  // Enroll — the backend now handles the FULL routing decision itself
+  // (eligible -> the project's own Manager; exempted -> Management for an
+  // exemption decision) based on the action/reason passed here. No more
+  // manual enroll-then-approve-then-set-eligibility round trip needed.
+  const [lastAction, setLastAction] = useState<{ id: number; name: string; action: 'eligible' | 'exempted' } | null>(null);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const triage = async (tmsProjectId: number, projectName: string, action: 'eligible' | 'not_sure' | 'exempted') => {
+  const triage = async (tmsProjectId: number, projectName: string, action: 'eligible' | 'exempted', exemptionReason?: string) => {
     setBusyId(tmsProjectId);
     setErrorMsg(null);
     try {
-      await csatCyclesApi.enrollProjects(cycleId, { tms_project_ids: [tmsProjectId] });
+      // Eligible for a Manager's own project is auto-approved server-side
+      // (see enroll_projects's is_manager_role branch) — no triage decision
+      // to make there. Exempt (Manager or not) always goes through `items`
+      // so the backend can route it into the chain (Manager exempt -> back
+      // with Quality to recheck).
+      await csatCyclesApi.enrollProjects(cycleId, {
+        items: [{ tms_project_id: tmsProjectId, action, exemption_reason: exemptionReason }],
+      });
 
-      // Eligible/Exempt are already a real decision by whoever's adding the
-      // project — approve the addition itself immediately instead of
-      // leaving it stuck behind a second, redundant approval gate that
-      // would otherwise mask this choice entirely (every fresh enrollment
-      // starts addition_approval_status='pending', which getRowStatus()
-      // checks BEFORE eligibility_status — so without this, every row would
-      // show "Needs review" no matter what was picked here).
-      //
-      // "Not sure" is the one case that should genuinely stay pending —
-      // that's what routes it to Management/the project's Manager to
-      // resolve via the existing approve/decline-addition flow, which is
-      // exactly what "Needs review" already means on the main page.
-      if (action !== 'not_sure') {
-        const list = await csatCyclesApi.listProjects(cycleId, { project_status: 'all', limit: 500 });
-        const enrolled = list.data.find(p => Number(p.project_ext_id) === tmsProjectId);
-        if (enrolled) {
-          await csatCyclesApi.approveAddition(cycleId, enrolled.enrollment_id);
-          if (action === 'exempted') {
-            await csatCyclesApi.setEligibility(cycleId, enrolled.enrollment_id, { eligibility_status: 'exempted' });
-          }
-        }
-      }
       // Immediate feedback — don't wait on the refetch (which can lag a
       // beat behind the click) to show that something actually happened.
       setTally(prev => ({ ...prev, [action]: prev[action] + 1 }));
@@ -254,14 +263,16 @@ function EnrollModal({
           />
 
           <div className="flex gap-2 mt-2">
-            <select
-              value={pmFilter}
-              onChange={e => setPmFilter(e.target.value)}
-              className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-green-200"
-            >
-              <option value="">All project managers</option>
-              {(managers ?? []).map(pm => <option key={pm.emp_id} value={pm.emp_id}>{pm.name}</option>)}
-            </select>
+            {!isManagerRole && (
+              <select
+                value={pmFilter}
+                onChange={e => setPmFilter(e.target.value)}
+                className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-green-200"
+              >
+                <option value="">All project managers</option>
+                {(managers ?? []).map(pm => <option key={pm.emp_id} value={pm.emp_id}>{pm.name}</option>)}
+              </select>
+            )}
             <select
               value={yearFilter}
               onChange={e => setYearFilter(e.target.value)}
@@ -287,13 +298,14 @@ function EnrollModal({
           <div className="flex items-center justify-between mt-3 mb-1 flex-wrap gap-y-1">
             <div className="flex items-center gap-3 text-xs font-semibold">
               <span className={tally.eligible > 0 ? 'text-green-700' : 'text-gray-300'}>✓ {tally.eligible} Eligible</span>
-              <span className={tally.not_sure > 0 ? 'text-blue-700' : 'text-gray-300'}>? {tally.not_sure} Not sure</span>
               <span className={tally.exempted > 0 ? 'text-gray-600' : 'text-gray-300'}>✕ {tally.exempted} Exempt</span>
             </div>
             {lastAction && (
               <span className="text-xs text-gray-400 truncate max-w-[220px]">
                 Last: <span className="font-medium text-gray-600">{lastAction.name}</span> → {
-                  lastAction.action === 'eligible' ? 'Eligible' : lastAction.action === 'not_sure' ? 'Sent to Management' : 'Exempted'
+                  lastAction.action === 'eligible'
+                    ? (isManagerRole ? 'Added' : "Sent to the project's Manager")
+                    : (isManagerRole ? 'Sent to Quality to recheck' : 'Sent to Management for exemption review')
                 }
               </span>
             )}
@@ -311,7 +323,11 @@ function EnrollModal({
             <LoadingSpinner text="Loading projects..." />
           ) : totalFiltered === 0 ? (
             <p className="text-sm text-gray-400 text-center py-8">
-              {search ? 'No matching projects' : 'All projects are already enrolled'}
+              {search
+                ? 'No matching projects'
+                : isManagerRole
+                  ? "No projects found where you're the assigned Manager"
+                  : 'All projects are already enrolled'}
             </p>
           ) : (
             <>
@@ -335,20 +351,14 @@ function EnrollModal({
                           onClick={() => triage(p.project_id, p.project_name, 'eligible')}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
                         >
-                          ✓ Eligible
+                          {isManagerRole ? '+ Add to Cycle' : '✓ Eligible'}
                         </button>
-                        {!isManagement && (
-                          <button
-                            disabled={busyId === p.project_id}
-                            onClick={() => triage(p.project_id, p.project_name, 'not_sure')}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            ? Not sure
-                          </button>
-                        )}
                         <button
                           disabled={busyId === p.project_id}
-                          onClick={() => triage(p.project_id, p.project_name, 'exempted')}
+                          onClick={() => {
+                            const reason = askExemptionReason(p.project_name);
+                            if (reason) triage(p.project_id, p.project_name, 'exempted', reason);
+                          }}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
                         >
                           ✕ Exempt
@@ -394,20 +404,14 @@ function EnrollModal({
                           onClick={() => triage(p.project_id, p.project_name, 'eligible')}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
                         >
-                          ✓ Eligible
+                          {isManagerRole ? '+ Add to Cycle' : '✓ Eligible'}
                         </button>
-                        {!isManagement && (
-                          <button
-                            disabled={busyId === p.project_id}
-                            onClick={() => triage(p.project_id, p.project_name, 'not_sure')}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            ? Not sure
-                          </button>
-                        )}
                         <button
                           disabled={busyId === p.project_id}
-                          onClick={() => triage(p.project_id, p.project_name, 'exempted')}
+                          onClick={() => {
+                            const reason = askExemptionReason(p.project_name);
+                            if (reason) triage(p.project_id, p.project_name, 'exempted', reason);
+                          }}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
                         >
                           ✕ Exempt
@@ -423,7 +427,7 @@ function EnrollModal({
 
         <div className="px-5 py-4 flex justify-between items-center border-t border-gray-100 flex-shrink-0">
           <span className="text-xs text-gray-400">
-            {tally.eligible + tally.not_sure + tally.exempted > 0
+            {tally.eligible + tally.exempted > 0
               ? 'All changes above are already saved.'
               : 'Each button takes effect immediately — nothing to submit.'}
           </span>
@@ -557,16 +561,16 @@ function AdditionDecisionModal({
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
         <div className="px-6 py-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
           <div>
-            <h3 className="font-bold text-amber-900">Approve Project Addition</h3>
+            <h3 className="font-bold text-amber-900">Final Review</h3>
             <p className="text-xs text-amber-700 mt-0.5">{project.project_name}</p>
           </div>
           <button onClick={onClose} className="text-amber-700 hover:text-amber-900 text-xl">×</button>
         </div>
         <div className="px-6 py-5 space-y-4">
           <p className="text-sm text-gray-600">
-            This project was just added to the cycle and is awaiting your decision.<br />
+            {project.quality_recheck_by_name || 'Quality'} reaffirmed this project as eligible after {project.manager_decided_by_name || 'its Manager'} exempted it. Your decision here is final.<br />
             <strong>Approve</strong> to confirm it belongs in this cycle.<br />
-            <strong>Decline</strong> to reject the addition.
+            <strong>Decline</strong> to mark it not eligible (a reason is required).
           </p>
 
           <div className="flex gap-3">
@@ -594,12 +598,12 @@ function AdditionDecisionModal({
 
           {decision === 'declined' && (
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Reason (optional)</label>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">Reason (required)</label>
               <textarea
                 value={remarks}
                 onChange={e => setRemarks(e.target.value)}
                 rows={2}
-                placeholder="Why is this addition being declined?"
+                placeholder="Why is this project not eligible?"
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none"
               />
             </div>
@@ -611,7 +615,7 @@ function AdditionDecisionModal({
           </button>
           <button
             onClick={() => mutation.mutate()}
-            disabled={!decision || mutation.isPending}
+            disabled={!decision || (decision === 'declined' && !remarks.trim()) || mutation.isPending}
             className="px-5 py-2 text-sm font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
             style={{
               background: decision === 'approved' ? '#059669' : decision === 'declined' ? '#DC2626' : '#9CA3AF',
@@ -642,9 +646,11 @@ export const CsatCycleDetailPage: React.FC = () => {
     || user?.role === UserRole.DELIVERY || user?.role === UserRole.SALES
     || user?.role === UserRole.MANAGEMENT;
   const isManager = user?.role === UserRole.MANAGER;
+  const isManagement = user?.role === UserRole.MANAGEMENT;
+  const isQuality = user?.role === UserRole.QUALITY;
   // Only Quality and Management add projects to a cycle — Managers approve
   // additions but don't initiate them.
-  const canAddProjects = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT;
+  const canAddProjects = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT || user?.role === UserRole.MANAGER;
   // Send Feedback is Quality/Management (+ Delivery/Sales, unchanged) — not
   // Manager, who has a separate plan for this, not yet built.
   const canSendFeedback = canManage && !isManager;
@@ -654,6 +660,7 @@ export const CsatCycleDetailPage: React.FC = () => {
   const [enrollModal, setEnrollModal] = useState(false);
   const [approvalTarget, setApprovalTarget] = useState<EnrolledProject | null>(null);
   const [additionTarget, setAdditionTarget] = useState<EnrolledProject | null>(null);
+  const [chainBusyId, setChainBusyId] = useState<number | null>(null);
 
   const { data: cycle, isLoading: cycleLoading } = useQuery({
     queryKey: ['csat-cycle', cycleId],
@@ -687,6 +694,45 @@ export const CsatCycleDetailPage: React.FC = () => {
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['cycle-projects', cycleId] });
+  };
+
+  // Shared handler for the three inline chain-decision actions — Manager
+  // reviewing a project routed to them, Quality rechecking a Manager's
+  // exemption, and Management approving/rejecting an exemption request.
+  // Each mirrors the equivalent action on SelectProjectsPage.tsx exactly,
+  // just scoped to an enrollment instead of a staging row.
+  const handleChainDecide = async (
+    project: EnrolledProject,
+    kind: 'manager' | 'quality-recheck' | 'exemption',
+    approveOrEligible: boolean,
+  ) => {
+    let reason: string | undefined;
+    const needsReason = (kind !== 'exemption' && !approveOrEligible) || (kind === 'exemption' && approveOrEligible);
+    if (needsReason) {
+      const r = askExemptionReason(project.project_name);
+      if (!r) return; // cancelled / empty
+      reason = r;
+    }
+    setChainBusyId(project.enrollment_id);
+    try {
+      if (kind === 'manager') {
+        await csatCyclesApi.managerDecide(cycleId, project.enrollment_id, approveOrEligible ? 'eligible' : 'exempted', reason);
+      } else if (kind === 'quality-recheck') {
+        await csatCyclesApi.qualityRecheck(cycleId, project.enrollment_id, approveOrEligible ? 'eligible' : 'exempted', reason);
+      } else {
+        // exemption: approveOrEligible here means "approve the exemption"
+        // (final exempt) — the inverse of the other two, where true means
+        // eligible. Kept as one shared handler rather than three near-
+        // identical ones for the sake of a slightly confusing boolean.
+        await csatCyclesApi.decideExemption(cycleId, project.enrollment_id, approveOrEligible, reason);
+      }
+      invalidate();
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      window.alert(detail || `Couldn't update "${project.project_name}". Please try again.`);
+    } finally {
+      setChainBusyId(null);
+    }
   };
 
   // Enrolled TMS IDs — used to exclude already-enrolled projects from the Add modal.
@@ -737,14 +783,37 @@ export const CsatCycleDetailPage: React.FC = () => {
   // second badge and the permanent workflow banner.
   const rowSubtitle = (p: EnrolledProject, status: RowStatus): string => {
     if (status === 'review') {
-      if (p.addition_approval_status === 'pending') {
-        return p.project_manager_name
-          ? `Added ${formatDate(p.enrolled_at)} · PM ${p.project_manager_name}`
-          : `Added ${formatDate(p.enrolled_at)} · no manager assigned`;
+      switch (p.addition_approval_status) {
+        case 'pending_manager_review':
+          // The one case that gets a distinct, unmissable tag rather than
+          // plain status text — this is specifically "something Quality did
+          // that now needs YOUR decision", for the Manager it's routed to.
+          if (isManager && p.manager_emp_id === user?.emp_id) {
+            return `${p.enrolled_by_name || 'Quality'} marked this eligible — needs your review`;
+          }
+          return p.project_manager_name
+            ? `Sent to ${p.project_manager_name} for review`
+            : 'Sent to the project Manager for review';
+        case 'pending_management_exemption_review':
+          return p.exemption_reason
+            ? `${p.enrolled_by_name || 'Quality'} requested exemption: "${p.exemption_reason}" · awaiting Management`
+            : `${p.enrolled_by_name || 'Quality'} requested exemption · awaiting Management`;
+        case 'pending_quality_recheck':
+          return p.exemption_reason
+            ? `${p.manager_decided_by_name || 'The Manager'} marked exempt: "${p.exemption_reason}" · back with Quality to recheck`
+            : `${p.manager_decided_by_name || 'The Manager'} marked exempt · back with Quality to recheck`;
+        case 'pending_management_review':
+          return `${p.quality_recheck_by_name || 'Quality'} reaffirmed eligible after ${p.manager_decided_by_name || 'the Manager'}'s exemption · awaiting Management's final call`;
+        case 'pending':
+          // Legacy rows only — no new addition can reach this value.
+          return p.project_manager_name
+            ? `Added ${formatDate(p.enrolled_at)} · PM ${p.project_manager_name}`
+            : `Added ${formatDate(p.enrolled_at)} · no manager assigned`;
+        default:
+          // Addition already resolved — this row is here because eligibility
+          // itself was escalated to a manager (the old "With manager" case).
+          return 'Sent for manager approval · awaiting decision';
       }
-      // Addition already resolved — this row is here because eligibility
-      // itself was escalated to a manager (the old "With manager" case).
-      return 'Sent for manager approval · awaiting decision';
     }
     if (status === 'ready') {
       return `Ready · added ${formatDate(p.enrolled_at)}`;
@@ -934,7 +1003,16 @@ export const CsatCycleDetailPage: React.FC = () => {
 
                   <RowStatusBadge
                     status={status}
-                    label={status === 'review' && project.can_approve_addition ? 'Needs your review' : undefined}
+                    label={
+                      status === 'ready' && project.feedback_status === 'completed'
+                        ? 'Feedback submitted'
+                        : status === 'review' && (
+                          project.can_approve_addition
+                          || (project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id)
+                          || (project.addition_approval_status === 'pending_quality_recheck' && isQuality)
+                          || (project.addition_approval_status === 'pending_management_exemption_review' && isManagement)
+                        ) ? 'Needs your review' : undefined
+                    }
                   />
 
                   {canManage && (
@@ -948,7 +1026,64 @@ export const CsatCycleDetailPage: React.FC = () => {
                         </button>
                       )}
 
-                      {status === 'ready' && canSendFeedback && (
+                      {project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id && (
+                        <>
+                          <button
+                            disabled={chainBusyId === project.enrollment_id}
+                            onClick={() => handleChainDecide(project, 'manager', true)}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ✓ Eligible
+                          </button>
+                          <button
+                            disabled={chainBusyId === project.enrollment_id}
+                            onClick={() => handleChainDecide(project, 'manager', false)}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ✕ Exempt
+                          </button>
+                        </>
+                      )}
+
+                      {project.addition_approval_status === 'pending_quality_recheck' && isQuality && (
+                        <>
+                          <button
+                            disabled={chainBusyId === project.enrollment_id}
+                            onClick={() => handleChainDecide(project, 'quality-recheck', true)}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ✓ Eligible
+                          </button>
+                          <button
+                            disabled={chainBusyId === project.enrollment_id}
+                            onClick={() => handleChainDecide(project, 'quality-recheck', false)}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ✕ Exempt
+                          </button>
+                        </>
+                      )}
+
+                      {project.addition_approval_status === 'pending_management_exemption_review' && isManagement && (
+                        <>
+                          <button
+                            disabled={chainBusyId === project.enrollment_id}
+                            onClick={() => handleChainDecide(project, 'exemption', false)}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            Reject Exemption
+                          </button>
+                          <button
+                            disabled={chainBusyId === project.enrollment_id}
+                            onClick={() => handleChainDecide(project, 'exemption', true)}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            Approve Exemption
+                          </button>
+                        </>
+                      )}
+
+                      {status === 'ready' && canSendFeedback && project.feedback_status !== 'completed' && (
                         <button
                           onClick={() => navigate('/feedback/send', {
                             state: { cycleId, projectId: Number(project.project_ext_id), enrollmentId: project.enrollment_id },

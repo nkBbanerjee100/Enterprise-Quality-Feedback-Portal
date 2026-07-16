@@ -11,6 +11,7 @@ import { csatCyclesApi } from '../../api/csat-cycles.api';
 import { formatDate } from '../../utils/formatters';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
+import { currentHalf, nextHalf, halfDates } from '../../utils/half-year';
 
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 
@@ -23,15 +24,27 @@ export const CsatCycleListPage: React.FC = () => {
   const [halfFilter, setHalfFilter] = useState<'H1' | 'H2' | null>(null);
   const pageSize = 10;
 
-  // Only Quality and Management create cycles — Managers approve project
-  // additions but don't create cycles themselves.
-  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT;
+  // Quality and Management create cycles; Managers can now also get to the
+  // Select Projects flow (to browse and, per canTriage there, act on their
+  // own projects) — see SelectProjectsPage.tsx.
+  const canManage = user?.role === UserRole.QUALITY || user?.role === UserRole.MANAGEMENT || user?.role === UserRole.MANAGER;
 
   // Fetch ALL cycles (no is_active filter anymore)
   const { data, isLoading, error } = useQuery({
     queryKey: ['csatCycles'],
     queryFn: () => csatCyclesApi.list(0, 50),
   });
+
+  // Once a cycle exists for the half-year we're currently in, there's
+  // nothing left to create until the next half opens — creating a second
+  // cycle for the same window would just duplicate it. Disable the button
+  // and tell people exactly when it'll be available again, rather than
+  // letting them click through to Select Projects and hit a wall there.
+  const cur = currentHalf(new Date());
+  const currentHalfCycleExists = (data?.data ?? []).some(c => c.year === cur.year && c.half === cur.half);
+  const nxt = nextHalf(cur.year, cur.half);
+  const [nextWindowOpensDate] = halfDates(nxt.year, nxt.half);
+  const nextWindowLabel = nextWindowOpensDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   // Derive available years from loaded data
   const availableYears = useMemo(() => {
@@ -81,13 +94,22 @@ export const CsatCycleListPage: React.FC = () => {
             </p>
           </div>
           {canManage && (
-            <button
-              onClick={() => navigate('/csat-cycles/select-projects')}
-              style={{ background: BRAND.green }}
-              className="px-4 py-2 text-white rounded-lg hover:opacity-90 text-sm font-medium flex items-center gap-2"
-            >
-              Select Projects for New Cycle
-            </button>
+            <div className="text-right">
+              <button
+                onClick={() => navigate('/csat-cycles/select-projects')}
+                disabled={currentHalfCycleExists}
+                title={currentHalfCycleExists ? `Already created for ${cur.year} ${cur.half} — next window opens ${nextWindowLabel}` : undefined}
+                style={{ background: BRAND.green }}
+                className="px-4 py-2 text-white rounded-lg hover:opacity-90 text-sm font-medium flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:opacity-40"
+              >
+                Select Projects for New Cycle
+              </button>
+              {currentHalfCycleExists && (
+                <p className="text-xs text-gray-400 mt-1.5 max-w-[220px]">
+                  {cur.year} {cur.half} cycle already created. Next window opens {nextWindowLabel}.
+                </p>
+              )}
+            </div>
           )}
         </div>
 
@@ -179,9 +201,9 @@ export const CsatCycleListPage: React.FC = () => {
                   <button onClick={clearFilters} className="text-sm mt-2 underline text-gray-400 hover:text-gray-600">
                     Clear filters
                   </button>
-                ) : canManage && (
+                ) : canManage && !currentHalfCycleExists ? (
                   <p className="text-sm mt-1">Click "Select Projects for New Cycle" to create one</p>
-                )}
+                ) : null}
               </div>
             ) : (
               <table className="w-full">

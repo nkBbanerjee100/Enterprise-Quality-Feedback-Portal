@@ -119,6 +119,182 @@ def get_management_users(local_db: Session) -> list[dict]:
     return [dict(r._mapping) for r in rows]
 
 
+def _get_user_by_emp_id(local_db: Session, emp_id: str) -> Optional[dict]:
+    row = local_db.execute(
+        text("SELECT EmpId AS emp_id, Email AS email, EmpFirstName AS first_name FROM csat_users WHERE EmpId = :emp_id LIMIT 1"),
+        {"emp_id": emp_id},
+    ).fetchone()
+    return dict(row._mapping) if row else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Manager-review chain notifications — mirror staging_notification_service.py
+# exactly, just scoped to a cycle enrollment instead of a staging row.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def notify_manager_enrollment_needs_review(
+    *, local_db: Session, manager_emp_id: str, cycle_id: int, project_name: str,
+    project_id: int, enrollment_id: int, enrolled_by_name: str, actor_emp_id: str,
+) -> None:
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "A project of yours needs your review"
+    message = (
+        f'{enrolled_by_name} marked "{project_name}" as eligible for this CSAT cycle. '
+        f"As its Manager, please review and mark it Eligible or Exempt."
+    )
+    local_db.add(Notification(
+        recipient_emp_id=manager_emp_id, actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_NEEDS_MANAGER_REVIEW", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, manager_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(to=recipient["email"], subject=title, body=f"{message}\n\n{link}",
+                                        html_content=f"<p>{message}</p><p><a href='{link}'>Review it</a></p>")
+            except Exception as e:
+                print(f"[WARN] Failed to email manager {manager_emp_id}: {e}")
+    local_db.flush()
+
+
+def notify_quality_enrollment_needs_recheck(
+    *, local_db: Session, cycle_id: int, project_name: str, project_id: int,
+    enrollment_id: int, enrolled_by_emp_id: str, manager_name: str,
+    exemption_reason: str, actor_emp_id: str,
+) -> None:
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "A project's Manager marked it exempt — please recheck"
+    message = (
+        f'{manager_name} marked "{project_name}" exempt: "{exemption_reason}". '
+        f"Please recheck — Exempt to finalize, or Eligible to send it on to Management."
+    )
+    local_db.add(Notification(
+        recipient_emp_id=enrolled_by_emp_id, actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_NEEDS_QUALITY_RECHECK", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, enrolled_by_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(to=recipient["email"], subject=title, body=f"{message}\n\n{link}",
+                                        html_content=f"<p>{message}</p><p><a href='{link}'>Recheck it</a></p>")
+            except Exception as e:
+                print(f"[WARN] Failed to email {enrolled_by_emp_id}: {e}")
+    local_db.flush()
+
+
+def notify_quality_role_enrollment_needs_recheck(
+    *, local_db: Session, cycle_id: int, project_name: str, project_id: int,
+    enrollment_id: int, manager_name: str, exemption_reason: str, actor_emp_id: str,
+) -> None:
+    """Same as notify_quality_enrollment_needs_recheck, but broadcast to
+    everyone with role QUALITY instead of one specific person — used when a
+    Manager adds and exempts one of their OWN projects directly (see
+    enroll_projects's is_manager_role branch), so there's no original
+    Quality submitter to target."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "A project's Manager marked it exempt — please recheck"
+    message = (
+        f'{manager_name} added and marked "{project_name}" exempt: "{exemption_reason}". '
+        f"Please recheck — Exempt to finalize, or Eligible to send it on to Management."
+    )
+    local_db.add(Notification(
+        recipient_role="QUALITY", actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_NEEDS_QUALITY_RECHECK", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    for quality_user in _get_users_by_role(local_db, "QUALITY"):
+        if EMAIL_NOTIFICATIONS_ENABLED and quality_user.get("email"):
+            try:
+                EmailSender.send_email(to=quality_user["email"], subject=title, body=f"{message}\n\n{link}",
+                                        html_content=f"<p>{message}</p><p><a href='{link}'>Recheck it</a></p>")
+            except Exception as e:
+                print(f"[WARN] Failed to email quality user {quality_user.get('emp_id')}: {e}")
+    local_db.flush()
+
+
+def notify_management_enrollment_exemption_request(
+    *, local_db: Session, cycle_id: int, project_name: str, project_id: int,
+    enrollment_id: int, enrolled_by_name: str, exemption_reason: str, actor_emp_id: str,
+) -> None:
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "An exemption request needs your decision"
+    message = (
+        f'{enrolled_by_name} requested "{project_name}" be exempted from this '
+        f'CSAT cycle: "{exemption_reason}". Please approve or reject the exemption.'
+    )
+    local_db.add(Notification(
+        recipient_role="MANAGEMENT", actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_EXEMPTION_REQUEST", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    for mgmt_user in get_management_users(local_db):
+        if EMAIL_NOTIFICATIONS_ENABLED and mgmt_user.get("email"):
+            try:
+                EmailSender.send_email(to=mgmt_user["email"], subject=title, body=f"{message}\n\n{link}",
+                                        html_content=f"<p>{message}</p><p><a href='{link}'>Decide</a></p>")
+            except Exception as e:
+                print(f"[WARN] Failed to email management user {mgmt_user.get('emp_id')}: {e}")
+    local_db.flush()
+
+
+def notify_quality_of_enrollment_exemption_decision(
+    *, local_db: Session, cycle_id: int, project_name: str, project_id: int,
+    enrollment_id: int, enrolled_by_emp_id: str, exemption_approved: bool,
+    decided_by_name: str, actor_emp_id: str, remarks: Optional[str] = None,
+) -> None:
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    outcome = (
+        "approved the exemption — it's now marked exempt" if exemption_approved
+        else "rejected the exemption — it's now eligible and has been sent to its Manager for review"
+    )
+    title = "Your exemption request was reviewed"
+    message = f'{decided_by_name} {outcome} for "{project_name}".'
+    if remarks:
+        message += f' Remarks: "{remarks}"'
+    local_db.add(Notification(
+        recipient_emp_id=enrolled_by_emp_id, actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_EXEMPTION_DECIDED", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, enrolled_by_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(to=recipient["email"], subject=title, body=f"{message}\n\n{link}",
+                                        html_content=f"<p>{message}</p><p><a href='{link}'>View it</a></p>")
+            except Exception as e:
+                print(f"[WARN] Failed to email {enrolled_by_emp_id}: {e}")
+    local_db.flush()
+
+
+def notify_management_enrollment_final_review(
+    *, local_db: Session, cycle_id: int, project_name: str, project_id: int,
+    enrollment_id: int, enrolled_by_name: str, actor_emp_id: str,
+) -> None:
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "A project needs your final review"
+    message = (
+        f'Quality reaffirmed "{project_name}" as eligible after its Manager exempted it. '
+        f"Your decision is final — please approve or decline."
+    )
+    local_db.add(Notification(
+        recipient_role="MANAGEMENT", actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_NEEDS_MANAGEMENT_REVIEW", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    for mgmt_user in get_management_users(local_db):
+        if EMAIL_NOTIFICATIONS_ENABLED and mgmt_user.get("email"):
+            try:
+                EmailSender.send_email(to=mgmt_user["email"], subject=title, body=f"{message}\n\n{link}",
+                                        html_content=f"<p>{message}</p><p><a href='{link}'>Review it</a></p>")
+            except Exception as e:
+                print(f"[WARN] Failed to email management user {mgmt_user.get('emp_id')}: {e}")
+    local_db.flush()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────

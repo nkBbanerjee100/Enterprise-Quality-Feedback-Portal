@@ -115,7 +115,11 @@ def get_dashboard(
     # optional number.
     average_csat_score = None
     try:
-        avg_scope_clause = scope_clause.replace("project_id", "r.project_id") if scope_clause else ""
+        # Built directly (not via scope_clause.replace(...)) — replacing the
+        # substring "project_id" inside scope_clause also matched the bind
+        # parameter name ":project_ids" itself, corrupting it into
+        # ":r.project_ids" and breaking the query entirely.
+        avg_scope_clause = "AND r.project_id IN :project_ids" if project_ids else ""
         avg_csat_row = db.execute(
             text(f"""
                 SELECT AVG(fr.csat_score) AS avg_csat

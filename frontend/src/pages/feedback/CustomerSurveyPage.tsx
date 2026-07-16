@@ -5,7 +5,7 @@
 * Completely redesigned based on the provided mockup.
 */
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -99,6 +99,8 @@ const LockIcon = () => (
 
 export const CustomerSurveyPage: React.FC = () => {
   const { token } = useParams<{ token: string }>();
+  const [searchParams] = useSearchParams();
+  const email = searchParams.get('email') || '';
 
   const [step, setStep] = useState<Step>('loading');
   const [meta, setMeta] = useState<SurveyMeta | null>(null);
@@ -127,12 +129,17 @@ export const CustomerSurveyPage: React.FC = () => {
 
   // ── Validate token on mount ──────────────────────────────────────────────
   useEffect(() => {
-    if (!token) {
+    if (!token || !email) {
+      // A direct link needs BOTH — landing here with just a token (no
+      // ?email=) means SurveyAccessPage's verification step was skipped
+      // entirely, e.g. someone opened /survey/{token} directly with a
+      // leaked/guessed token. The backend now requires email too, so
+      // there's no point even calling it without one.
       setStep('error');
       return;
     }
 
-    fetch(`${API_BASE}/api/feedback/public/${token}`)
+    fetch(`${API_BASE}/api/feedback/public/${token}?email=${encodeURIComponent(email)}`)
       .then(async res => {
         if (res.status === 404) { setStep('error'); return; }
         if (res.status === 409) { setStep('already_submitted'); return; }
@@ -148,7 +155,7 @@ export const CustomerSurveyPage: React.FC = () => {
         setProjectNameDisplay(`${data.projectName || `Project #${data.projectId}`} / ${pCode}`);
       })
       .catch(() => setStep('error'));
-  }, [token]);
+  }, [token, email]);
 
   // ── Auto-calculate Overall Rating ──────────────────────────────────────
   useEffect(() => {
@@ -225,7 +232,7 @@ export const CustomerSurveyPage: React.FC = () => {
   };
 
   const handleSubmit = async () => {
-    if (!validate() || !token) return;
+    if (!validate() || !token || !email) return;
     setSubmitting(true);
     try {
       const payloadData = {
@@ -245,7 +252,7 @@ export const CustomerSurveyPage: React.FC = () => {
         signature
       };
 
-      const res = await fetch(`${API_BASE}/api/feedback/public/${token}/submit`, {
+      const res = await fetch(`${API_BASE}/api/feedback/public/${token}/submit?email=${encodeURIComponent(email)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: payloadData }),

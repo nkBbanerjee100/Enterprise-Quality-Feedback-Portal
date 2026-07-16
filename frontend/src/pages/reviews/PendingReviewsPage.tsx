@@ -129,44 +129,52 @@ function ReviewRow({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <button
             disabled={busy}
-            onClick={() => onDecide(item, true)}
+            onClick={() => onDecide(item, item.action_type === 'exemption' ? false : true)}
             style={{
               fontSize: 12.5, fontWeight: 600, color: '#fff', background: BRAND.green,
               border: 'none', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
               opacity: busy ? 0.5 : 1,
             }}
           >
-            Approve
+            {item.action_type === 'exemption' ? 'Reject Exemption' : 'Approve'}
           </button>
           <button
             disabled={busy}
-            onClick={() => setShowDecline(s => !s)}
+            onClick={() => item.action_type === 'exemption' ? onDecide(item, true) : setShowDecline(s => !s)}
             style={{
               fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff',
               border: '1px solid #E5E7EB', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
               opacity: busy ? 0.5 : 1,
             }}
           >
-            Decline
+            {item.action_type === 'exemption' ? 'Approve Exemption' : 'Decline'}
           </button>
         </div>
       </div>
 
-      {showDecline && (
+      {item.exemption_reason && (
+        <p style={{ fontSize: 12, color: BRAND.textLight, margin: '8px 0 0 50px', background: '#FAFAFA', borderRadius: 8, padding: '6px 10px' }}>
+          Reason: "{item.exemption_reason}"
+        </p>
+      )}
+
+      {showDecline && item.action_type === 'final' && (
         <div style={{ marginTop: 10, marginLeft: 50, display: 'flex', gap: 8 }}>
           <input
             type="text"
             value={remarks}
             onChange={e => setRemarks(e.target.value)}
-            placeholder="Reason (optional)"
+            placeholder="Reason (required)"
             style={{ flex: 1, fontSize: 13, padding: '8px 10px', border: '1px solid #E5E7EB', borderRadius: 8 }}
           />
           <button
-            disabled={busy}
+            disabled={busy || !remarks.trim()}
             onClick={() => onDecide(item, false, remarks || undefined)}
             style={{
               fontSize: 12.5, fontWeight: 600, color: '#B91C1C', background: '#FEF2F2',
-              border: '1px solid #FCA5A5', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
+              border: '1px solid #FCA5A5', borderRadius: 8, padding: '7px 14px',
+              cursor: (busy || !remarks.trim()) ? 'not-allowed' : 'pointer',
+              opacity: (busy || !remarks.trim()) ? 0.5 : 1,
             }}
           >
             Confirm Decline
@@ -196,10 +204,26 @@ export const PendingReviewsPage: React.FC = () => {
 
   const handleDecide = async (item: PendingReviewItem, approve: boolean, remarks?: string) => {
     const key = `${item.source}:${item.id}`;
+
+    // 'final' declines (Management's last-word decision) require a reason —
+    // same rule as everywhere else in this chain. 'exemption' decisions
+    // (approve/reject an exemption REQUEST) don't need one: Quality already
+    // gave a reason when requesting it.
+    if (item.action_type === 'final' && !approve && !(remarks || '').trim()) {
+      setErrorMsg('An exemption reason is required to decline.');
+      return;
+    }
+
     setBusyId(key);
     setErrorMsg(null);
     try {
-      if (item.source === 'staging') {
+      if (item.action_type === 'exemption') {
+        if (item.source === 'staging') {
+          await projectStagingApi.decideExemption(item.id, approve, remarks);
+        } else {
+          await csatCyclesApi.decideExemption(item.cycle_id!, item.id, approve, remarks);
+        }
+      } else if (item.source === 'staging') {
         await projectStagingApi.decide(item.id, approve, remarks);
       } else if (approve) {
         await csatCyclesApi.approveAddition(item.cycle_id!, item.id);

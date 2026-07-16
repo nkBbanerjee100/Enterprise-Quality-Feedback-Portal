@@ -368,7 +368,7 @@ export const QualityUserDashboard: React.FC = () => {
                       <p style={{ fontSize: 11, color: BRAND.textLight, margin: 0 }}>{req.recipientEmail}</p>
                     </td>
                     <td style={{ padding: '12px 16px', fontSize: 12, color: BRAND.textMid }}>
-                      #{req.projectId}
+                      {req.projectName || `#${req.projectId}`}
                     </td>
                     <td style={{ padding: '12px 16px', fontSize: 12, color: BRAND.textMid, whiteSpace: 'nowrap' }}>
                       {req.requestSentAt ? new Date(req.requestSentAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
@@ -510,7 +510,7 @@ export const QualityUserDashboard: React.FC = () => {
                       : '—'}
                   </td>
                   <td style={{ padding: '12px 16px', fontSize: 12, color: BRAND.textMid }}>
-                    {project.project_manager_id ?? '—'}
+                    {project.project_manager_name || (project.project_manager_id ?? '—')}
                   </td>
                   <td style={{ padding: '12px 16px' }}>
                     <StatusBadge status="ELIGIBLE" />

@@ -1,26 +1,34 @@
 """
 Project Staging — pre-cycle project selection and triage.
 
-Workflow:
+Workflow (mandatory exemption reason at every exempt step — see
+app/models/project_staging.py for the full state machine):
   1. Quality browses candidate TMS projects (GET /candidates) — active
      projects first, then completed projects whose EndDate falls within the
      last 6 months.
-  2. Quality triages each selected project (POST /select) as one of:
-       - eligible   → ready to go straight into the next cycle
-       - not_sure   → sent to Management to decide (POST /{id}/decide)
-       - exempted   → excluded from the pool entirely
-  3. Management approves/declines "not sure" projects. Approve → eligible.
-     Decline → exempted.
-  4. Once Quality has the eligible set they want, POST /create-cycle creates
+  2. Quality triages each selected project (POST /select):
+       - eligible → goes to the project's own Manager (PM) for review
+       - exempted → mandatory reason; OUT of the pool immediately, final
+  3. The project's Manager decides (POST /{id}/manager-decide):
+       - eligible → final, ready for the cycle — no further review
+       - exempted → mandatory reason; goes BACK to Quality to recheck
+  4. Quality rechecks (POST /{id}/quality-recheck):
+       - exempted → mandatory reason; OUT of the pool immediately, final
+       - eligible → goes to Management for a final decision
+  5. Management makes the final call (POST /{id}/decide):
+       - approve → final eligible
+       - decline → mandatory reason; final exempt
+  6. Once Quality has the eligible set they want, POST /create-cycle creates
      a new CSAT cycle and enrolls all currently-eligible staged projects
      into it directly (already vetted here — no second addition-approval
-     round needed).
+     round needed). Anything still mid-review gets carried forward into the
+     new cycle's own addition-approval flow instead of being lost.
 
 This is a separate, earlier stage from the in-cycle addition-approval flow
-(cycle_notification_service.py / enroll_projects) — that one is unchanged
-and still applies when adding MORE projects to an ALREADY-EXISTING cycle
-later. This one only ever involves Management, never a project's Manager
-(PM) — Managers have no role in the initial project-pool triage.
+(cycle_notification_service.py / enroll_projects) — that one is unchanged,
+still applies when adding MORE projects to an ALREADY-EXISTING cycle later,
+and is also where a Manager can add one of their own projects directly
+(auto-approved, no review chain at all — see enroll_projects).
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy.orm import Session
@@ -36,17 +44,38 @@ from app.models.cycle_project_enrollment import CycleProjectEnrollment, Eligibil
 from app.models.csat_cycle import CSATCycle
 from app.schemas.project_staging import (
     SelectProjectsRequest, TriageAction, ManagementStagingDecisionRequest,
+    ManagerStagingDecisionRequest, QualityRecheckRequest,
     StagedProjectResponse, StagingCandidateResponse, CreateCycleFromStagingRequest,
 )
 from app.routers.csat_cycles import _half_dates, _cycle_resp
 from app.services.staging_notification_service import (
     notify_management_project_needs_review, notify_quality_of_decision, notify_pm_project_triaged,
+    notify_manager_project_needs_review, notify_quality_project_needs_recheck,
+    notify_management_exemption_request, notify_quality_of_exemption_decision,
+    notify_quality_role_project_needs_recheck,
 )
-from app.services.cycle_notification_service import notify_project_added_to_cycle
+from app.services.cycle_notification_service import (
+    notify_project_added_to_cycle, get_project_manager,
+    notify_manager_enrollment_needs_review, notify_management_enrollment_exemption_request,
+    notify_management_enrollment_final_review,
+)
 from app.services.audit_service import log_action, get_client_ip
 from app.schemas.audit import AuditActions
 
 router = APIRouter()
+
+# Statuses where the staged project is still mid-review — hasn't reached a
+# final eligible/exempted outcome yet. Used to block re-triaging something
+# that's already awaiting someone else's decision, and to decide what needs
+# carrying forward into a new cycle's own addition-approval flow.
+_PENDING_STATUSES = (
+    StagingStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW,
+    StagingStatus.PENDING_MANAGER_REVIEW,
+    StagingStatus.PENDING_QUALITY_RECHECK,
+    StagingStatus.PENDING_MANAGEMENT_REVIEW,
+)
+
+
 
 
 def _current_half(today: date) -> tuple[int, str]:
@@ -95,9 +124,16 @@ def _staging_to_response(s: ProjectStaging, project: Project, name_map: Optional
         status=s.status,
         selected_by=name_map.get(s.selected_by, s.selected_by),
         selected_at=s.selected_at,
+        manager_emp_id=s.manager_emp_id,
+        manager_name=name_map.get(s.manager_emp_id, s.manager_emp_id) if s.manager_emp_id else None,
+        manager_decided_by=name_map.get(s.manager_decided_by, s.manager_decided_by) if s.manager_decided_by else None,
+        manager_decided_at=s.manager_decided_at,
+        quality_recheck_by=name_map.get(s.quality_recheck_by, s.quality_recheck_by) if s.quality_recheck_by else None,
+        quality_recheck_at=s.quality_recheck_at,
         decided_by=name_map.get(s.decided_by, s.decided_by) if s.decided_by else None,
         decided_at=s.decided_at,
         decision_remarks=s.decision_remarks,
+        exemption_reason=s.exemption_reason,
     )
 
 
@@ -372,10 +408,20 @@ def list_staging_pool(
     if status_filter:
         q = q.filter(ProjectStaging.status == status_filter)
 
+    # A Manager only ever sees staged projects that are (or were) theirs to
+    # review — matched via the cached manager_emp_id set when Quality first
+    # marked the project eligible. Quality/Management see everything.
+    if current_user.get("role") == "MANAGER":
+        q = q.filter(ProjectStaging.manager_emp_id == current_user["emp_id"])
+
     rows = q.order_by(ProjectStaging.selected_at.desc()).all()
     name_map = _resolve_names(
         db,
-        [s.selected_by for s, _ in rows] + [s.decided_by for s, _ in rows if s.decided_by],
+        [s.selected_by for s, _ in rows]
+        + [s.decided_by for s, _ in rows if s.decided_by]
+        + [s.manager_emp_id for s, _ in rows if s.manager_emp_id]
+        + [s.manager_decided_by for s, _ in rows if s.manager_decided_by]
+        + [s.quality_recheck_by for s, _ in rows if s.quality_recheck_by],
     )
     return [_staging_to_response(s, p, name_map) for s, p in rows]
 
@@ -391,6 +437,14 @@ def select_projects(
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
+    """
+    Quality's (or Management's) first pass over a candidate project:
+      - eligible → routed to the project's own Manager (TMS PmId) to
+        review next. If the project has no assigned Manager in TMS, there's
+        no one to route it to, so it lands directly at final Eligible.
+      - exempted → mandatory exemption_reason; goes to Management to
+        approve or reject the exemption request.
+    """
     selected = []
     skipped = []
     warnings = []
@@ -398,14 +452,10 @@ def select_projects(
     selected_by_name = current_user.get("name") or current_user["emp_id"]
 
     for item in payload.items:
-        # Management is the highest authority in this workflow — "not sure"
-        # exists to escalate to Management, which is meaningless when
-        # Management is the one triaging it. The frontend already hides this
-        # option for them; this is the same rule enforced server-side.
-        if item.action == TriageAction.NOT_SURE and current_user["role"] == "MANAGEMENT":
+        if item.action == TriageAction.EXEMPTED and not (item.exemption_reason or "").strip():
             skipped.append({
                 "tms_project_id": item.tms_project_id,
-                "reason": "Management can't mark a project 'not sure' — decide Eligible or Exempt directly.",
+                "reason": "An exemption reason is required to mark a project exempt.",
             })
             continue
 
@@ -416,25 +466,41 @@ def select_projects(
             ProjectStaging.converted_cycle_id.is_(None),
         ).first()
 
-        if existing and existing.status == StagingStatus.PENDING_MANAGEMENT_REVIEW:
+        if existing and existing.status in _PENDING_STATUSES:
             skipped.append({
                 "tms_project_id": item.tms_project_id,
-                "reason": "already sent to Management for review — wait for their decision",
+                "reason": "already mid-review — wait for the current step's decision before re-triaging",
             })
             continue
 
-        new_status = {
-            TriageAction.ELIGIBLE: StagingStatus.ELIGIBLE,
-            TriageAction.EXEMPTED: StagingStatus.EXEMPTED,
-            TriageAction.NOT_SURE: StagingStatus.PENDING_MANAGEMENT_REVIEW,
-        }[item.action]
+        pm_info = None
+        if item.action == TriageAction.ELIGIBLE:
+            try:
+                pm_info = get_project_manager(item.tms_project_id, tms_db)
+            except Exception as e:
+                print(f"[WARN] Could not resolve PM for tms project {item.tms_project_id}: {e}")
+
+        if item.action == TriageAction.EXEMPTED:
+            new_status = StagingStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW
+        elif pm_info:
+            new_status = StagingStatus.PENDING_MANAGER_REVIEW
+        else:
+            # No Manager assigned in TMS — nobody to route this to, so it's
+            # eligible outright rather than stuck waiting forever.
+            new_status = StagingStatus.ELIGIBLE
 
         if existing:
             existing.status = new_status
             existing.selected_by = current_user["emp_id"]
+            existing.manager_emp_id = pm_info["emp_id"] if pm_info else None
+            existing.manager_decided_by = None
+            existing.manager_decided_at = None
+            existing.quality_recheck_by = None
+            existing.quality_recheck_at = None
             existing.decided_by = None
             existing.decided_at = None
             existing.decision_remarks = None
+            existing.exemption_reason = item.exemption_reason if item.action == TriageAction.EXEMPTED else None
             staging_row = existing
         else:
             staging_row = ProjectStaging(
@@ -442,17 +508,20 @@ def select_projects(
                 project_ext_id=project.project_id,
                 status=new_status,
                 selected_by=current_user["emp_id"],
+                manager_emp_id=pm_info["emp_id"] if pm_info else None,
+                exemption_reason=item.exemption_reason if item.action == TriageAction.EXEMPTED else None,
             )
             db.add(staging_row)
 
         db.flush()
         selected.append(item.tms_project_id)
-        triaged_this_call.append((staging_row.id, project.project_name, item.action.value))
+        triaged_this_call.append((staging_row.id, project.project_name, new_status.value))
 
-        if item.action == TriageAction.NOT_SURE:
+        if new_status == StagingStatus.PENDING_MANAGER_REVIEW:
             try:
-                notify_management_project_needs_review(
+                notify_manager_project_needs_review(
                     local_db=db,
+                    manager_emp_id=pm_info["emp_id"],
                     project_name=project.project_name,
                     project_id=project.id,
                     staging_id=staging_row.id,
@@ -460,10 +529,24 @@ def select_projects(
                     actor_emp_id=current_user["emp_id"],
                 )
             except Exception as e:
-                # Previously this only printed to the server console, which
-                # nobody watching the UI would ever see — the project still
-                # got triaged correctly, but Management silently never heard
-                # about it. Now it comes back in the response too.
+                print(f"[WARN] Failed to notify manager for staging {staging_row.id}: {e}")
+                warnings.append({
+                    "tms_project_id": item.tms_project_id,
+                    "reason": "Saved, but notifying the project's Manager failed — they won't see this in their bell yet.",
+                })
+
+        elif new_status == StagingStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW:
+            try:
+                notify_management_exemption_request(
+                    local_db=db,
+                    project_name=project.project_name,
+                    project_id=project.id,
+                    staging_id=staging_row.id,
+                    selected_by_name=selected_by_name,
+                    exemption_reason=item.exemption_reason or "",
+                    actor_emp_id=current_user["emp_id"],
+                )
+            except Exception as e:
                 print(f"[WARN] Failed to notify Management for staging {staging_row.id}: {e}")
                 warnings.append({
                     "tms_project_id": item.tms_project_id,
@@ -471,12 +554,11 @@ def select_projects(
                 })
 
         # ── Notify the project's own Manager (PM) directly ─────────────────
-        # A final triage decision (eligible / exempted) is about THEIR
-        # project, so they should hear about it even though they have no
-        # say in the decision itself. Skipped for 'not_sure' — there's no
-        # final outcome yet for the PM to be told about until Management
-        # decides (see notify_quality_of_decision, called from /decide).
-        elif item.action in (TriageAction.ELIGIBLE, TriageAction.EXEMPTED):
+        # Only for a project that landed at final Eligible right here with
+        # no Manager to route it to — there's nothing else in this branch
+        # that's a final outcome anymore (Exempt now goes to Management
+        # first, see above).
+        elif new_status == StagingStatus.ELIGIBLE:
             try:
                 notify_pm_project_triaged(
                     local_db=db,
@@ -512,6 +594,437 @@ def select_projects(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# POST /{staging_id}/decide-exemption — Management approves or rejects
+# Quality's exemption request
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/{staging_id}/decide-exemption", response_model=StagedProjectResponse)
+def decide_exemption_request(
+    staging_id: int,
+    payload: ManagementStagingDecisionRequest,
+    request: Request,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(require_role("MANAGEMENT")),
+):
+    """
+    approve=True  -> confirms the exemption; final Exempt.
+    approve=False -> rejects the exemption; project is now Eligible and
+    routed to its own Manager for review (or straight to Eligible if it has
+    no Manager in TMS), same as if Quality had marked it Eligible outright.
+    """
+    staging_row = db.query(ProjectStaging).filter(ProjectStaging.id == staging_id).first()
+    if not staging_row:
+        raise HTTPException(status_code=404, detail="Staged project not found")
+    if staging_row.status != StagingStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW:
+        raise HTTPException(status_code=400, detail="This project isn't awaiting an exemption decision.")
+
+    project = db.query(Project).filter(Project.id == staging_row.project_id).first()
+    decided_by_name = current_user.get("name") or current_user["emp_id"]
+
+    staging_row.decided_by = current_user["emp_id"]
+    staging_row.decided_at = datetime.utcnow()
+    staging_row.decision_remarks = payload.remarks
+
+    if payload.approve:
+        staging_row.status = StagingStatus.EXEMPTED
+        # Quality's original reason stands — Management approved it as-is;
+        # any remarks are just supplementary context, not a replacement.
+    else:
+        pm_info = None
+        try:
+            pm_info = get_project_manager(int(staging_row.project_ext_id), tms_db)
+        except Exception as e:
+            print(f"[WARN] Could not resolve PM for staged project {staging_row.project_ext_id}: {e}")
+
+        staging_row.exemption_reason = None
+        if pm_info:
+            staging_row.status = StagingStatus.PENDING_MANAGER_REVIEW
+            staging_row.manager_emp_id = pm_info["emp_id"]
+        else:
+            staging_row.status = StagingStatus.ELIGIBLE
+            staging_row.manager_emp_id = None
+
+    db.commit()
+    db.refresh(staging_row)
+
+    log_action(
+        db,
+        action=AuditActions.CYCLE_ADDITION_APPROVED if payload.approve else AuditActions.CYCLE_ADDITION_DECLINED,
+        actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="project_staging", entity_id=staging_row.id,
+        details={"project_name": project.project_name if project else None, "remarks": payload.remarks, "via": "exemption_decision"},
+    )
+
+    try:
+        notify_quality_of_exemption_decision(
+            local_db=db,
+            project_name=project.project_name,
+            project_id=project.id,
+            staging_id=staging_row.id,
+            selected_by_emp_id=staging_row.selected_by,
+            exemption_approved=payload.approve,
+            decided_by_name=decided_by_name,
+            actor_emp_id=current_user["emp_id"],
+            remarks=payload.remarks,
+        )
+        if staging_row.status == StagingStatus.PENDING_MANAGER_REVIEW:
+            notify_manager_project_needs_review(
+                local_db=db,
+                manager_emp_id=staging_row.manager_emp_id,
+                project_name=project.project_name,
+                project_id=project.id,
+                staging_id=staging_row.id,
+                selected_by_name=decided_by_name,
+                actor_emp_id=current_user["emp_id"],
+            )
+        db.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to notify for exemption decision on staging {staging_row.id}: {e}")
+
+    name_map = _resolve_names(db, [staging_row.selected_by, staging_row.decided_by, staging_row.manager_emp_id])
+    return _staging_to_response(staging_row, project, name_map)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /my-projects — every TMS project a Manager is assigned to (PmId),
+# merged with current staging status if any
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/my-projects")
+def list_my_projects(
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(require_role("MANAGER")),
+):
+    """
+    All of a Manager's own TMS projects (matched via PmId), whether or not
+    Quality has staged/triaged them yet — lets a Manager act directly on
+    any of their own projects instead of only ones already routed to them.
+    """
+    rows = tms_db.execute(
+        text(f"""
+            SELECT DISTINCT p.Id AS project_ext_id, p.Name AS project_name
+            FROM tsms_projects p
+            {_PM_JOIN}
+            WHERE pm.EmpId = :emp_id
+            ORDER BY p.Name
+        """),
+        {"emp_id": current_user["emp_id"]},
+    ).fetchall()
+
+    ext_ids = [str(r.project_ext_id) for r in rows]
+    staging_rows = []
+    if ext_ids:
+        staging_rows = db.query(ProjectStaging).filter(
+            ProjectStaging.project_ext_id.in_(ext_ids),
+            ProjectStaging.converted_cycle_id.is_(None),
+        ).all()
+    staging_map = {s.project_ext_id: s for s in staging_rows}
+    name_map = _resolve_names(db, [s.selected_by for s in staging_rows])
+
+    result = []
+    for r in rows:
+        ext_id = str(r.project_ext_id)
+        s = staging_map.get(ext_id)
+        result.append({
+            "project_ext_id": ext_id,
+            "project_name": r.project_name,
+            "staging_id": s.id if s else None,
+            "status": s.status.value if s and hasattr(s.status, "value") else (s.status if s else None),
+            "selected_by": name_map.get(s.selected_by, s.selected_by) if s else None,
+            "exemption_reason": s.exemption_reason if s else None,
+        })
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /manager-select — a Manager decides directly on one of their own
+# projects, whether or not Quality has touched it yet
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/manager-select")
+def manager_select_projects(
+    payload: SelectProjectsRequest,
+    request: Request,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(require_role("MANAGER")),
+):
+    """
+    A Manager acting directly on one of their own projects:
+      - eligible → final immediately, straight into the "ready for the next
+        cycle" pool. It's their own project — no Quality/Management review
+        needed, same as approving a project Quality had already routed to
+        them.
+      - exempted → mandatory reason; goes to Quality to recheck, same as
+        any other Manager exemption.
+    Only allowed on projects where this Manager is the assigned PM, and
+    only if the project isn't already mid-review or decided through some
+    other path.
+    """
+    selected = []
+    skipped = []
+    warnings = []
+    decided_by_name = current_user.get("name") or current_user["emp_id"]
+
+    for item in payload.items:
+        if item.action == TriageAction.EXEMPTED and not (item.exemption_reason or "").strip():
+            skipped.append({
+                "tms_project_id": item.tms_project_id,
+                "reason": "An exemption reason is required to mark a project exempt.",
+            })
+            continue
+
+        pm_info = None
+        try:
+            pm_info = get_project_manager(item.tms_project_id, tms_db)
+        except Exception as e:
+            print(f"[WARN] Could not resolve PM for tms project {item.tms_project_id}: {e}")
+        if not pm_info or pm_info.get("emp_id") != current_user["emp_id"]:
+            skipped.append({
+                "tms_project_id": item.tms_project_id,
+                "reason": "You can only decide on projects you're the assigned Manager for.",
+            })
+            continue
+
+        project = _upsert_project(db, tms_db, item.tms_project_id)
+        existing = db.query(ProjectStaging).filter(
+            ProjectStaging.project_id == project.id,
+            ProjectStaging.converted_cycle_id.is_(None),
+        ).first()
+
+        # Only actionable here if there's no staging row yet, or Quality
+        # already routed it to this same Manager and it's still waiting on
+        # them — anything else (with Quality's recheck, with Management,
+        # already decided) is mid-review or finalized elsewhere already.
+        if existing and existing.status != StagingStatus.PENDING_MANAGER_REVIEW:
+            skipped.append({
+                "tms_project_id": item.tms_project_id,
+                "reason": "already mid-review or decided elsewhere",
+            })
+            continue
+
+        new_status = StagingStatus.ELIGIBLE if item.action == TriageAction.ELIGIBLE else StagingStatus.PENDING_QUALITY_RECHECK
+        original_selector = existing.selected_by if existing else None
+
+        if existing:
+            staging_row = existing
+        else:
+            staging_row = ProjectStaging(
+                project_id=project.id,
+                project_ext_id=project.project_id,
+                status=new_status,
+                selected_by=current_user["emp_id"],
+            )
+            db.add(staging_row)
+
+        staging_row.manager_emp_id = current_user["emp_id"]
+        staging_row.manager_decided_by = current_user["emp_id"]
+        staging_row.manager_decided_at = datetime.utcnow()
+        staging_row.status = new_status
+        staging_row.exemption_reason = item.exemption_reason if item.action == TriageAction.EXEMPTED else None
+
+        db.flush()
+        selected.append(item.tms_project_id)
+
+        if new_status == StagingStatus.PENDING_QUALITY_RECHECK:
+            try:
+                if original_selector:
+                    notify_quality_project_needs_recheck(
+                        local_db=db,
+                        project_name=project.project_name,
+                        project_id=project.id,
+                        staging_id=staging_row.id,
+                        selected_by_emp_id=original_selector,
+                        manager_name=decided_by_name,
+                        exemption_reason=item.exemption_reason or "",
+                        actor_emp_id=current_user["emp_id"],
+                    )
+                else:
+                    # Self-initiated by the Manager — no original Quality
+                    # submitter to target, so broadcast to the role instead.
+                    notify_quality_role_project_needs_recheck(
+                        local_db=db,
+                        project_name=project.project_name,
+                        project_id=project.id,
+                        staging_id=staging_row.id,
+                        manager_name=decided_by_name,
+                        exemption_reason=item.exemption_reason or "",
+                        actor_emp_id=current_user["emp_id"],
+                    )
+            except Exception as e:
+                print(f"[WARN] Failed to notify Quality for staging {staging_row.id}: {e}")
+                warnings.append({
+                    "tms_project_id": item.tms_project_id,
+                    "reason": "Saved, but notifying Quality failed — they won't see this in their bell yet.",
+                })
+
+        log_action(
+            db, action=AuditActions.PROJECT_STAGING_TRIAGED,
+            actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
+            actor_role=current_user["role"], ip_address=get_client_ip(request),
+            entity_type="project_staging", entity_id=staging_row.id,
+            details={"project_name": project.project_name, "decision": new_status.value, "via": "manager_self_select"},
+        )
+
+    db.commit()
+    return {"selected": selected, "skipped": skipped, "warnings": warnings}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /{staging_id}/manager-decide — the project's own Manager reviews a
+# project Quality marked eligible
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/{staging_id}/manager-decide", response_model=StagedProjectResponse)
+def manager_decide_staged_project(
+    staging_id: int,
+    payload: ManagerStagingDecisionRequest,
+    request: Request,
+    db: Session = Depends(get_local_db),
+    current_user: dict = Depends(require_role("MANAGER")),
+):
+    staging_row = db.query(ProjectStaging).filter(ProjectStaging.id == staging_id).first()
+    if not staging_row:
+        raise HTTPException(status_code=404, detail="Staged project not found")
+    if staging_row.status != StagingStatus.PENDING_MANAGER_REVIEW:
+        raise HTTPException(status_code=400, detail="This project isn't awaiting your review.")
+    if staging_row.manager_emp_id != current_user["emp_id"]:
+        raise HTTPException(status_code=403, detail="You can only decide on projects you're the assigned Manager for.")
+
+    if payload.decision == TriageAction.EXEMPTED and not (payload.exemption_reason or "").strip():
+        raise HTTPException(status_code=400, detail="An exemption reason is required.")
+
+    project = db.query(Project).filter(Project.id == staging_row.project_id).first()
+    decided_by_name = current_user.get("name") or current_user["emp_id"]
+
+    staging_row.manager_decided_by = current_user["emp_id"]
+    staging_row.manager_decided_at = datetime.utcnow()
+
+    if payload.decision == TriageAction.EXEMPTED:
+        staging_row.status = StagingStatus.PENDING_QUALITY_RECHECK
+        staging_row.exemption_reason = payload.exemption_reason
+    else:
+        staging_row.status = StagingStatus.ELIGIBLE
+        staging_row.exemption_reason = None
+
+    db.commit()
+    db.refresh(staging_row)
+
+    log_action(
+        db, action=AuditActions.PROJECT_STAGING_TRIAGED,
+        actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="project_staging", entity_id=staging_row.id,
+        details={"project_name": project.project_name if project else None, "decision": staging_row.status.value if hasattr(staging_row.status, "value") else staging_row.status, "via": "manager_decide"},
+    )
+
+    try:
+        if staging_row.status == StagingStatus.PENDING_QUALITY_RECHECK:
+            notify_quality_project_needs_recheck(
+                local_db=db,
+                project_name=project.project_name,
+                project_id=project.id,
+                staging_id=staging_row.id,
+                selected_by_emp_id=staging_row.selected_by,
+                manager_name=decided_by_name,
+                exemption_reason=payload.exemption_reason or "",
+                actor_emp_id=current_user["emp_id"],
+            )
+        else:
+            notify_quality_of_decision(
+                local_db=db,
+                project_name=project.project_name,
+                project_id=project.id,
+                staging_id=staging_row.id,
+                selected_by_emp_id=staging_row.selected_by,
+                approved=True,
+                decided_by_name=decided_by_name,
+                actor_emp_id=current_user["emp_id"],
+            )
+        db.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to notify Quality of manager decision on staging {staging_row.id}: {e}")
+
+    name_map = _resolve_names(db, [staging_row.selected_by, staging_row.manager_emp_id, staging_row.manager_decided_by])
+    return _staging_to_response(staging_row, project, name_map)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /{staging_id}/quality-recheck — Quality rechecks a project the
+# Manager just exempted
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/{staging_id}/quality-recheck", response_model=StagedProjectResponse)
+def quality_recheck_staged_project(
+    staging_id: int,
+    payload: QualityRecheckRequest,
+    request: Request,
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+    current_user: dict = Depends(require_role("QUALITY")),
+):
+    staging_row = db.query(ProjectStaging).filter(ProjectStaging.id == staging_id).first()
+    if not staging_row:
+        raise HTTPException(status_code=404, detail="Staged project not found")
+    if staging_row.status != StagingStatus.PENDING_QUALITY_RECHECK:
+        raise HTTPException(status_code=400, detail="This project isn't awaiting a Quality recheck.")
+
+    if payload.decision == TriageAction.EXEMPTED and not (payload.exemption_reason or "").strip():
+        raise HTTPException(status_code=400, detail="An exemption reason is required.")
+
+    project = db.query(Project).filter(Project.id == staging_row.project_id).first()
+    decided_by_name = current_user.get("name") or current_user["emp_id"]
+
+    staging_row.quality_recheck_by = current_user["emp_id"]
+    staging_row.quality_recheck_at = datetime.utcnow()
+
+    if payload.decision == TriageAction.EXEMPTED:
+        staging_row.status = StagingStatus.EXEMPTED
+        staging_row.exemption_reason = payload.exemption_reason
+    else:
+        staging_row.status = StagingStatus.PENDING_MANAGEMENT_REVIEW
+        staging_row.exemption_reason = None
+
+    db.commit()
+    db.refresh(staging_row)
+
+    log_action(
+        db, action=AuditActions.PROJECT_STAGING_TRIAGED,
+        actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
+        actor_role=current_user["role"], ip_address=get_client_ip(request),
+        entity_type="project_staging", entity_id=staging_row.id,
+        details={"project_name": project.project_name if project else None, "decision": staging_row.status.value if hasattr(staging_row.status, "value") else staging_row.status, "via": "quality_recheck"},
+    )
+
+    try:
+        if staging_row.status == StagingStatus.PENDING_MANAGEMENT_REVIEW:
+            notify_management_project_needs_review(
+                local_db=db,
+                project_name=project.project_name,
+                project_id=project.id,
+                staging_id=staging_row.id,
+                selected_by_name=decided_by_name,
+                actor_emp_id=current_user["emp_id"],
+            )
+        else:
+            notify_pm_project_triaged(
+                local_db=db,
+                tms_db=tms_db,
+                project_name=project.project_name,
+                project_id=project.id,
+                project_ext_id=project.project_id,
+                staging_id=staging_row.id,
+                decision="exempted",
+                triaged_by_name=decided_by_name,
+                actor_emp_id=current_user["emp_id"],
+            )
+        db.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to notify for quality recheck on staging {staging_row.id}: {e}")
+
+    name_map = _resolve_names(db, [staging_row.selected_by, staging_row.manager_emp_id, staging_row.quality_recheck_by])
+    return _staging_to_response(staging_row, project, name_map)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POST /{staging_id}/decide — Management approves/declines a "not sure" project
 # ─────────────────────────────────────────────────────────────────────────────
 @router.post("/{staging_id}/decide", response_model=StagedProjectResponse)
@@ -528,10 +1041,14 @@ def decide_staged_project(
     if staging_row.status != StagingStatus.PENDING_MANAGEMENT_REVIEW:
         raise HTTPException(status_code=400, detail="This project isn't awaiting management review.")
 
+    if not payload.approve and not (payload.remarks or "").strip():
+        raise HTTPException(status_code=400, detail="An exemption reason is required to decline.")
+
     staging_row.status = StagingStatus.ELIGIBLE if payload.approve else StagingStatus.EXEMPTED
     staging_row.decided_by = current_user["emp_id"]
     staging_row.decided_at = datetime.utcnow()
     staging_row.decision_remarks = payload.remarks
+    staging_row.exemption_reason = None if payload.approve else payload.remarks
 
     db.commit()
     db.refresh(staging_row)
@@ -577,6 +1094,20 @@ def create_cycle_from_staging(
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
 ):
+    # A cycle for this exact half-year already existing means the frontend's
+    # "Select Projects for New Cycle" button should have been disabled — but
+    # don't rely on that alone (stale tab, cached page, direct API call).
+    # Enforce it here too so it's never possible to end up with two cycles
+    # covering the same window.
+    existing_cycle = db.query(CSATCycle).filter(
+        CSATCycle.start_date == _half_dates(payload.year, payload.half)[0],
+    ).first()
+    if existing_cycle:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A cycle for {payload.year} {payload.half} already exists ({existing_cycle.cycle_name}).",
+        )
+
     eligible_rows = db.query(ProjectStaging).filter(
         ProjectStaging.status == StagingStatus.ELIGIBLE,
         ProjectStaging.converted_cycle_id.is_(None),
@@ -588,13 +1119,13 @@ def create_cycle_from_staging(
             detail="No eligible projects in the staging pool yet — select and triage projects first.",
         )
 
-    # Carry forward exempted / still-pending-review projects from the SAME
+    # Carry forward exempted / still-mid-review projects from the SAME
     # staging round too — previously only eligible ones got enrolled, which
-    # silently left "not sure" and "exempt" projects behind in the staging
+    # silently left in-review and exempt projects behind in the staging
     # pool with no way to ever show up in the new cycle's Needs review /
     # Not eligible filters at all.
     other_rows = db.query(ProjectStaging).filter(
-        ProjectStaging.status.in_([StagingStatus.EXEMPTED, StagingStatus.PENDING_MANAGEMENT_REVIEW]),
+        ProjectStaging.status.in_([StagingStatus.EXEMPTED, *_PENDING_STATUSES]),
         ProjectStaging.converted_cycle_id.is_(None),
     ).all()
 
@@ -611,25 +1142,30 @@ def create_cycle_from_staging(
 
     now = datetime.utcnow()
     enrolled_count = 0
-    needs_review_notify: list[tuple[CycleProjectEnrollment, Project]] = []
+    needs_manager_notify: list[tuple[CycleProjectEnrollment, Project]] = []
+    needs_exemption_notify: list[tuple[CycleProjectEnrollment, Project, str]] = []  # (enr, project, reason)
+    needs_management_notify: list[tuple[CycleProjectEnrollment, Project]] = []
     all_enrolled: list[tuple[CycleProjectEnrollment, Project]] = []
 
     for staging_row in eligible_rows + other_rows:
         project = db.query(Project).filter(Project.id == staging_row.project_id).first()
 
         if staging_row.status == StagingStatus.EXEMPTED:
-            # Quality already decided this one — lands directly as Not
-            # eligible, no addition-approval round needed.
+            # Quality (or Management) already finalized this one — lands
+            # directly as Not eligible, no addition-approval round needed.
             elig_status = EligibilityStatus.EXEMPTED
-            addition_status = AdditionApprovalStatus.APPROVED
-            remarks = "Marked not eligible via project staging."
-        elif staging_row.status == StagingStatus.PENDING_MANAGEMENT_REVIEW:
-            # Quality was unsure and it's still awaiting a decision — carry
-            # that open question forward into the cycle's own addition-
-            # approval flow (Needs review), rather than leaving it stranded
-            # in a staging pool that's no longer reachable once converted.
+            addition_status = AdditionApprovalStatus.DECLINED
+            remarks = staging_row.exemption_reason or "Marked not eligible via project staging."
+        elif staging_row.status in _PENDING_STATUSES:
+            # Still mid-review (awaiting the Manager, a Quality recheck, an
+            # exemption decision, or Management's final call) — carry that
+            # EXACT open question forward into the cycle's own chain rather
+            # than collapsing it to a generic "pending", which would strand
+            # it with nobody able to act on it. The staging and enrollment
+            # pending values are the same literal strings by design, so this
+            # is a direct 1:1 carry-over.
             elig_status = EligibilityStatus.ELIGIBLE
-            addition_status = AdditionApprovalStatus.PENDING
+            addition_status = AdditionApprovalStatus(staging_row.status.value)
             remarks = None
         else:  # ELIGIBLE
             elig_status = EligibilityStatus.ELIGIBLE
@@ -640,11 +1176,17 @@ def create_cycle_from_staging(
             cycle_id=cycle.id,
             project_id=staging_row.project_id,
             eligibility_status=elig_status,
-            enrolled_by=current_user["emp_id"],
+            enrolled_by=staging_row.selected_by,
             addition_approval_status=addition_status,
-            addition_approved_by=current_user["emp_id"] if addition_status == AdditionApprovalStatus.APPROVED else None,
-            addition_approved_at=now if addition_status == AdditionApprovalStatus.APPROVED else None,
+            addition_approved_by=current_user["emp_id"] if addition_status in (AdditionApprovalStatus.APPROVED, AdditionApprovalStatus.DECLINED) else None,
+            addition_approved_at=now if addition_status in (AdditionApprovalStatus.APPROVED, AdditionApprovalStatus.DECLINED) else None,
             addition_decision_remarks=remarks,
+            exemption_reason=staging_row.exemption_reason,
+            manager_emp_id=staging_row.manager_emp_id,
+            manager_decided_by=staging_row.manager_decided_by,
+            manager_decided_at=staging_row.manager_decided_at,
+            quality_recheck_by=staging_row.quality_recheck_by,
+            quality_recheck_at=staging_row.quality_recheck_at,
         )
         db.add(enr)
         db.flush()
@@ -654,32 +1196,50 @@ def create_cycle_from_staging(
         if project:
             all_enrolled.append((enr, project))
 
-        if addition_status == AdditionApprovalStatus.PENDING and project:
-            needs_review_notify.append((enr, project))
+        if project:
+            if addition_status == AdditionApprovalStatus.PENDING_MANAGER_REVIEW and enr.manager_emp_id:
+                needs_manager_notify.append((enr, project))
+            elif addition_status == AdditionApprovalStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW:
+                needs_exemption_notify.append((enr, project, enr.exemption_reason or ""))
+            elif addition_status == AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW:
+                needs_management_notify.append((enr, project))
 
     db.commit()
     db.refresh(cycle)
 
-    # Notify Management/PM for the still-undecided ones — same as any other
-    # newly-added-and-pending project. Best-effort: the cycle/enrollments
-    # themselves are already committed above regardless of whether this works.
+    # Notify whoever needs to act next on each carried-over item — same
+    # best-effort pattern as everywhere else in this chain: the cycle and
+    # enrollments themselves are already committed above regardless.
     enrolled_by_name = current_user.get("name") or current_user["emp_id"]
-    for enr, project in needs_review_notify:
+    for enr, project in needs_manager_notify:
         try:
-            notify_project_added_to_cycle(
-                local_db=db,
-                tms_db=tms_db,
-                cycle_id=cycle.id,
-                cycle_name=cycle.cycle_name,
-                project_id=project.id,
-                project_ext_id=project.project_id,
-                project_name=project.project_name,
-                enrollment_id=enr.id,
-                enrolled_by_name=enrolled_by_name,
+            notify_manager_enrollment_needs_review(
+                local_db=db, manager_emp_id=enr.manager_emp_id, cycle_id=cycle.id,
+                project_name=project.project_name, project_id=project.id,
+                enrollment_id=enr.id, enrolled_by_name=enrolled_by_name,
                 actor_emp_id=current_user["emp_id"],
             )
         except Exception as e:
-            print(f"[WARN] Failed to notify for staged-carryover enrollment {enr.id}: {e}")
+            print(f"[WARN] Failed to notify manager for staged-carryover enrollment {enr.id}: {e}")
+    for enr, project, reason in needs_exemption_notify:
+        try:
+            notify_management_enrollment_exemption_request(
+                local_db=db, cycle_id=cycle.id, project_name=project.project_name,
+                project_id=project.id, enrollment_id=enr.id,
+                enrolled_by_name=enrolled_by_name, exemption_reason=reason,
+                actor_emp_id=current_user["emp_id"],
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to notify management for staged-carryover enrollment {enr.id}: {e}")
+    for enr, project in needs_management_notify:
+        try:
+            notify_management_enrollment_final_review(
+                local_db=db, cycle_id=cycle.id, project_name=project.project_name,
+                project_id=project.id, enrollment_id=enr.id,
+                enrolled_by_name=enrolled_by_name, actor_emp_id=current_user["emp_id"],
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to notify management for staged-carryover enrollment {enr.id}: {e}")
     db.commit()
 
     ip = get_client_ip(request)

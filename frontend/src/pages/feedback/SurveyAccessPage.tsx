@@ -32,7 +32,7 @@ const verify = async()=>{
         if(result.success || result.valid){
 
             navigate(
-                `/survey/${token}`
+                `/survey/${token}?email=${encodeURIComponent(email)}`
             );
 
         }
