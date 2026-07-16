@@ -87,7 +87,7 @@ class CycleProjectEnrollment(Base):
     # ── Addition-approval fields (separate flow — gates the act of adding a
     #    project to the cycle at all, not its eligibility) ─────────────────
     addition_approval_status = Column(
-        String(30),
+        String(40),
         default=AdditionApprovalStatus.PENDING,
         nullable=False,
     )

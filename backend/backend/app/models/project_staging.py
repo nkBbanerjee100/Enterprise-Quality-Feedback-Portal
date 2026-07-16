@@ -61,7 +61,7 @@ class ProjectStaging(Base):
     project_id = Column(Integer, nullable=False, index=True)      # dim_projects.id (local)
     project_ext_id = Column(String(50), nullable=False, index=True)  # TMS project id, as string
 
-    status = Column(String(30), default=StagingStatus.PENDING_MANAGER_REVIEW, nullable=False)
+    status = Column(String(40), default=StagingStatus.PENDING_MANAGER_REVIEW, nullable=False)
 
     selected_by = Column(String(50), nullable=False)   # emp_id of the Quality user who triaged it
     selected_at = Column(DateTime, server_default=func.now())
