@@ -574,15 +574,17 @@ export const SelectProjectsPage: React.FC = () => {
                 // decided/mid-review-elsewhere — otherwise the handful of
                 // projects actually waiting on the Manager get buried
                 // alphabetically among a couple dozen others.
-                const rank = (p: typeof a) => p.status === 'pending_manager_review' ? 0 : p.staging_id === null ? 1 : 2;
+                const rank = (p: typeof a) => (p.status === 'pending_manager_review' || p.is_reopen) ? 0 : p.staging_id === null ? 1 : 2;
                 return rank(a) - rank(b);
               }).map(item => {
                 // Actionable directly when there's no staging row yet (never
-                // touched by Quality) or Quality already routed it here and
-                // it's still waiting — anything else is mid-review or
-                // decided elsewhere, so it's read-only.
-                const actionable = item.staging_id === null || item.status === 'pending_manager_review';
-                const meta = item.status && item.status !== 'pending_manager_review' ? STAGING_STATUS_META[item.status] : null;
+                // touched by Quality), Quality already routed it here and
+                // it's still waiting, or Quality+Management overrode this
+                // Manager's own exemption and they get one more say
+                // (is_reopen) — anything else is mid-review or decided
+                // elsewhere, so it's read-only.
+                const actionable = item.staging_id === null || item.status === 'pending_manager_review' || item.is_reopen;
+                const meta = item.status && item.status !== 'pending_manager_review' && !item.is_reopen ? STAGING_STATUS_META[item.status] : null;
 
                 const decide = (action: TriageAction, reason?: string) => {
                   setBusyId(item.project_ext_id);
@@ -604,13 +606,24 @@ export const SelectProjectsPage: React.FC = () => {
                             : item.status === 'exempted' ? `Exempted${item.exemption_reason ? `: "${item.exemption_reason}"` : ''}`
                             : item.selected_by ? `Selected by ${item.selected_by}` : ''}
                         </p>
+                      ) : item.is_reopen ? (
+                        <p className="text-xs mt-0.5 font-medium" style={{ color: '#9B7C2A' }}>
+                          {item.conflict_note}
+                        </p>
                       ) : item.staging_id && (
-                        <span
-                          className="inline-block mt-1 text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
-                          style={{ background: '#FDF6E3', color: '#9B7C2A' }}
-                        >
-                          Marked eligible by {item.selected_by ?? 'Quality'} — needs your review
-                        </span>
+                        <>
+                          <span
+                            className="inline-block mt-1 text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+                            style={{ background: '#FDF6E3', color: '#9B7C2A' }}
+                          >
+                            Marked eligible by {item.selected_by ?? 'Quality'} — needs your review
+                          </span>
+                          {item.conflict_note && (
+                            <p className="text-xs mt-1 font-medium" style={{ color: '#9B7C2A' }}>
+                              {item.conflict_note}
+                            </p>
+                          )}
+                        </>
                       )}
                     </div>
                     {actionable ? (
@@ -624,7 +637,7 @@ export const SelectProjectsPage: React.FC = () => {
                             ✓ Eligible
                           </button>
                           <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                            final · adds to cycle
+                            {item.is_reopen ? 'keeps it in the cycle' : 'final · adds to cycle'}
                           </span>
                         </div>
                         <div className="flex flex-col items-center gap-1">
@@ -632,7 +645,9 @@ export const SelectProjectsPage: React.FC = () => {
                             disabled={busyId === item.project_ext_id}
                             onClick={() => setExemptConfirm({
                               projectName: item.project_name,
-                              message: 'This sends the project to Quality to recheck before anything is finalized.',
+                              message: item.is_reopen
+                                ? 'Quality and Management already reviewed this — if you exempt it now, that\u2019s final and it will be removed from the cycle.'
+                                : 'This sends the project to Quality to recheck before anything is finalized.',
                               requireReason: true,
                               confirmLabel: 'Exempt',
                               onConfirm: (reason) => decide('exempted', reason),
@@ -642,7 +657,7 @@ export const SelectProjectsPage: React.FC = () => {
                             ✕ Exempt
                           </button>
                           <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                            → sends to Quality for recheck
+                            {item.is_reopen ? 'final · removes from cycle' : '→ sends to Quality for recheck'}
                           </span>
                         </div>
                       </div>
@@ -690,8 +705,15 @@ export const SelectProjectsPage: React.FC = () => {
               {eligible.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {eligible.map(p => (
-                    <span key={p.staging_id} className="text-xs bg-green-50 text-green-700 px-2.5 py-1 rounded-full">
-                      {p.project_name}
+                    <span key={p.staging_id} className="inline-flex flex-col">
+                      <span className="text-xs bg-green-50 text-green-700 px-2.5 py-1 rounded-full">
+                        {p.project_name}
+                      </span>
+                      {p.conflict_note && (
+                        <span className="text-[10px] text-gray-400 mt-0.5 px-0.5 max-w-[180px] leading-tight">
+                          {p.conflict_note}
+                        </span>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -777,6 +799,11 @@ export const SelectProjectsPage: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{p.project_name}</p>
                       <p className="text-xs text-gray-500 mt-0.5">Awaiting {p.manager_name ?? 'the project Manager'}</p>
+                      {p.conflict_note && (
+                        <p className="text-xs mt-1 font-medium" style={{ color: '#9B7C2A' }}>
+                          {p.conflict_note}
+                        </p>
+                      )}
                     </div>
                     <span
                       className="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap"

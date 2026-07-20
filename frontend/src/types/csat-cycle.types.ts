@@ -65,6 +65,7 @@ export interface EnrolledProject {
   quality_recheck_by?: string;
   quality_recheck_by_name?: string;
   quality_recheck_at?: string;
+  conflict_note?: string | null;
 
   // ── Feedback Request Status ──────────────────────────────────────────────
   feedback_request_id?: number | null;

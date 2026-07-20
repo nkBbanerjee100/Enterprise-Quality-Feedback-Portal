@@ -52,7 +52,7 @@ from app.services.staging_notification_service import (
     notify_management_project_needs_review, notify_quality_of_decision, notify_pm_project_triaged,
     notify_manager_project_needs_review, notify_quality_project_needs_recheck,
     notify_management_exemption_request, notify_quality_of_exemption_decision,
-    notify_quality_role_project_needs_recheck,
+    notify_quality_role_project_needs_recheck, notify_manager_of_final_decision,
 )
 from app.services.cycle_notification_service import (
     notify_project_added_to_cycle, get_project_manager,
@@ -113,6 +113,36 @@ def _resolve_names(db: Session, emp_ids: list[str]) -> dict[str, str]:
     }
 
 
+def _staging_conflict_note(s: ProjectStaging, name_map: dict) -> Optional[str]:
+    """Two specific conflict shapes worth calling out explicitly, both
+    derived from fields already tracked on the row — no new columns
+    needed:
+
+    1. Manager exempted it -> Quality reaffirmed eligible on recheck ->
+       Management's final call kept it eligible. The Manager who started
+       the disagreement gets a notification already (see
+       notify_manager_of_final_decision); this note is the same story,
+       surfaced wherever the project itself is displayed.
+    2. Quality wanted it exempt -> Management disagreed and sent it to the
+       Manager instead of deciding unilaterally. manager_decided_by is
+       still empty here (the Manager hasn't acted yet) — decided_by being
+       set while still PENDING_MANAGER_REVIEW is what distinguishes this
+       from the ordinary "Quality marked it eligible" path into the same
+       status, which never touches decided_by at all.
+    """
+    manager_name = name_map.get(s.manager_decided_by, s.manager_decided_by) if s.manager_decided_by else None
+    quality_name = name_map.get(s.selected_by, s.selected_by) if s.selected_by else None
+    management_name = name_map.get(s.decided_by, s.decided_by) if s.decided_by else None
+
+    if s.status == StagingStatus.ELIGIBLE and s.manager_decided_by and s.quality_recheck_by:
+        return f"Quality and Management chose to keep this project despite {manager_name}'s exemption."
+
+    if s.status == StagingStatus.PENDING_MANAGER_REVIEW and s.decided_by and not s.manager_decided_by:
+        return f"{quality_name} wanted to exempt this project, but {management_name} disagreed — it's your call."
+
+    return None
+
+
 def _staging_to_response(s: ProjectStaging, project: Project, name_map: Optional[dict] = None) -> StagedProjectResponse:
     name_map = name_map or {}
     return StagedProjectResponse(
@@ -134,6 +164,7 @@ def _staging_to_response(s: ProjectStaging, project: Project, name_map: Optional
         decided_at=s.decided_at,
         decision_remarks=s.decision_remarks,
         exemption_reason=s.exemption_reason,
+        conflict_note=_staging_conflict_note(s, name_map),
     )
 
 
@@ -608,11 +639,11 @@ def decide_exemption_request(
 ):
     """
     approve=True  -> confirms the exemption; final Exempt.
-    approve=False -> rejects the exemption; project is now Eligible
-    immediately — appended to the ready-for-the-cycle list, same as any
-    other eligible project (neither added nor removed automatically, just
-    ready like the rest). No Manager hand-off, no further review: this is
-    Management's final call on the exemption request either way.
+    approve=False -> rejects the exemption; Quality wanted this project
+    exempt but Management disagrees — that's a genuine conflict, so it goes
+    to the project's own Manager to make the actual call (or straight to
+    Eligible if it somehow has no Manager in TMS at all). Whenever Quality
+    and Management disagree, the Manager is always the tie-breaker.
     """
     staging_row = db.query(ProjectStaging).filter(ProjectStaging.id == staging_id).first()
     if not staging_row:
@@ -632,9 +663,6 @@ def decide_exemption_request(
         # Quality's original reason stands — Management approved it as-is;
         # any remarks are just supplementary context, not a replacement.
     else:
-        # Still worth resolving the PM for display purposes (who the
-        # project's Manager is), but it no longer gates anything — the
-        # project goes Eligible either way, Management's word is final.
         pm_info = None
         try:
             pm_info = get_project_manager(int(staging_row.project_ext_id), tms_db)
@@ -642,8 +670,15 @@ def decide_exemption_request(
             print(f"[WARN] Could not resolve PM for staged project {staging_row.project_ext_id}: {e}")
 
         staging_row.exemption_reason = None
-        staging_row.status = StagingStatus.ELIGIBLE
-        staging_row.manager_emp_id = pm_info["emp_id"] if pm_info else None
+        if pm_info:
+            staging_row.status = StagingStatus.PENDING_MANAGER_REVIEW
+            staging_row.manager_emp_id = pm_info["emp_id"]
+        else:
+            # No Manager on file for this project at all — nobody left to
+            # break the tie, so it goes straight to Eligible rather than
+            # getting stuck with no one able to act on it.
+            staging_row.status = StagingStatus.ELIGIBLE
+            staging_row.manager_emp_id = None
 
     db.commit()
     db.refresh(staging_row)
@@ -669,6 +704,16 @@ def decide_exemption_request(
             actor_emp_id=current_user["emp_id"],
             remarks=payload.remarks,
         )
+        if staging_row.status == StagingStatus.PENDING_MANAGER_REVIEW:
+            notify_manager_project_needs_review(
+                local_db=db,
+                manager_emp_id=staging_row.manager_emp_id,
+                project_name=project.project_name,
+                project_id=project.id,
+                staging_id=staging_row.id,
+                selected_by_name=decided_by_name,
+                actor_emp_id=current_user["emp_id"],
+            )
         db.commit()
     except Exception as e:
         print(f"[WARN] Failed to notify for exemption decision on staging {staging_row.id}: {e}")
@@ -711,12 +756,30 @@ def list_my_projects(
             ProjectStaging.converted_cycle_id.is_(None),
         ).all()
     staging_map = {s.project_ext_id: s for s in staging_rows}
-    name_map = _resolve_names(db, [s.selected_by for s in staging_rows])
+    name_map = _resolve_names(db, [
+        eid for s in staging_rows
+        for eid in (s.selected_by, s.manager_decided_by, s.quality_recheck_by, s.decided_by)
+        if eid
+    ])
 
     result = []
     for r in rows:
         ext_id = str(r.project_ext_id)
         s = staging_map.get(ext_id)
+        # Reopen case: this Manager exempted it, Quality and Management
+        # overrode that and kept it Eligible anyway — surfaced here so the
+        # Manager can still have the final word (see manager-decide's
+        # is_reopen handling) even though the row is already "final".
+        is_reopen = bool(
+            s and s.status == StagingStatus.ELIGIBLE
+            and s.manager_decided_by == current_user["emp_id"]
+            and s.quality_recheck_by is not None
+        )
+        # Same helper used everywhere else — also covers the OTHER conflict
+        # shape (Quality wanted exempt, Management disagreed, now it's
+        # sitting with this Manager) so they see *why* it landed with them
+        # instead of the generic "marked eligible by Quality" framing.
+        conflict_note = _staging_conflict_note(s, name_map) if s else None
         result.append({
             "project_ext_id": ext_id,
             "project_name": r.project_name,
@@ -724,6 +787,8 @@ def list_my_projects(
             "status": s.status.value if s and hasattr(s.status, "value") else (s.status if s else None),
             "selected_by": name_map.get(s.selected_by, s.selected_by) if s else None,
             "exemption_reason": s.exemption_reason if s else None,
+            "conflict_note": conflict_note,
+            "is_reopen": is_reopen,
         })
     return result
 
@@ -876,7 +941,19 @@ def manager_decide_staged_project(
     staging_row = db.query(ProjectStaging).filter(ProjectStaging.id == staging_id).first()
     if not staging_row:
         raise HTTPException(status_code=404, detail="Staged project not found")
-    if staging_row.status != StagingStatus.PENDING_MANAGER_REVIEW:
+
+    # Normal case: Quality marked it eligible, waiting on this Manager's
+    # first review. Reopen case: THIS Manager already exempted it, Quality
+    # and Management overrode that and kept it eligible anyway — but the
+    # Manager still gets the final say on their own project. Exempting here
+    # is genuinely final: everyone's already had their turn, no more
+    # sending it back through Quality again.
+    is_reopen = (
+        staging_row.status == StagingStatus.ELIGIBLE
+        and staging_row.manager_decided_by == current_user["emp_id"]
+        and staging_row.quality_recheck_by is not None
+    )
+    if staging_row.status != StagingStatus.PENDING_MANAGER_REVIEW and not is_reopen:
         raise HTTPException(status_code=400, detail="This project isn't awaiting your review.")
     if staging_row.manager_emp_id != current_user["emp_id"]:
         raise HTTPException(status_code=403, detail="You can only decide on projects you're the assigned Manager for.")
@@ -891,7 +968,10 @@ def manager_decide_staged_project(
     staging_row.manager_decided_at = datetime.utcnow()
 
     if payload.decision == TriageAction.EXEMPTED:
-        staging_row.status = StagingStatus.PENDING_QUALITY_RECHECK
+        # Reopen case: final, full stop — Quality and Management already
+        # weighed in once; this isn't sent back for another round.
+        # First-pass case: unchanged, still goes to Quality to recheck.
+        staging_row.status = StagingStatus.EXEMPTED if is_reopen else StagingStatus.PENDING_QUALITY_RECHECK
         staging_row.exemption_reason = payload.exemption_reason
     else:
         staging_row.status = StagingStatus.ELIGIBLE
@@ -1066,11 +1146,26 @@ def decide_staged_project(
             actor_emp_id=current_user["emp_id"],
             remarks=payload.remarks,
         )
+        # This row only ever reaches PENDING_MANAGEMENT_REVIEW via one path:
+        # a Manager exempted it, Quality reaffirmed it eligible on recheck,
+        # and now Management has the final word — so the Manager who
+        # started that disagreement gets told how it landed, separately
+        # from Quality's own notification above.
+        notify_manager_of_final_decision(
+            local_db=db,
+            project_name=project.project_name,
+            project_id=project.id,
+            staging_id=staging_row.id,
+            manager_emp_id=staging_row.manager_emp_id,
+            approved=payload.approve,
+            decided_by_name=current_user.get("name") or current_user["emp_id"],
+            actor_emp_id=current_user["emp_id"],
+        )
         db.commit()
     except Exception as e:
         print(f"[WARN] Failed to notify {staging_row.selected_by} of decision on staging {staging_row.id}: {e}")
 
-    name_map = _resolve_names(db, [staging_row.selected_by, staging_row.decided_by])
+    name_map = _resolve_names(db, [staging_row.selected_by, staging_row.decided_by, staging_row.manager_decided_by])
     return _staging_to_response(staging_row, project, name_map)
 
 

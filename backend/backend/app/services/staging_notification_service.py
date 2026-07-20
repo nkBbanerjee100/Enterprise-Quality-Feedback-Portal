@@ -137,6 +137,71 @@ def notify_quality_of_decision(
     local_db.flush()
 
 
+def notify_manager_of_final_decision(
+    *,
+    local_db: Session,
+    project_name: str,
+    project_id: int,
+    staging_id: int,
+    manager_emp_id: Optional[str],   # the Manager whose original exemption started this chain
+    approved: bool,                  # Management's final call: True = eligible, False = exempt
+    decided_by_name: str,            # the Management user who just decided
+    actor_emp_id: str,
+) -> None:
+    """Notify the project's Manager once Management makes the FINAL call on
+    a project that went: Manager exempted it -> Quality reaffirmed it
+    eligible during recheck -> Management had the last word. The Manager
+    was the one who started this disagreement, so they're the one who
+    needs to hear how it was resolved — Quality already gets notified
+    separately (notify_quality_of_decision), this is the Manager's copy.
+
+    manager_emp_id can be missing on very old rows from before this field
+    was tracked consistently — skip quietly rather than notify no one and
+    also rather than error out the whole decision over a notification.
+    """
+    if not manager_emp_id:
+        return
+
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "Final decision on your exemption"
+    if approved:
+        message = (
+            f'You marked "{project_name}" exempt, but Quality reaffirmed it eligible and '
+            f"{decided_by_name} has confirmed it eligible — it will be included in the cycle."
+        )
+    else:
+        message = (
+            f'{decided_by_name} agreed with your exemption — both you and Management have '
+            f'marked "{project_name}" exempt. It will not be included in the cycle.'
+        )
+
+    local_db.add(Notification(
+        recipient_emp_id=manager_emp_id,
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_MANAGER_FINAL_DECISION",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,
+        link=link,
+    ))
+
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, manager_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(
+                    to=recipient["email"],
+                    subject=title,
+                    body=f"{message}\n\nSee it here: {link}",
+                    html_content=f"<p>{message}</p><p><a href='{link}'>View it</a></p>",
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to email manager {manager_emp_id} about final decision: {e}")
+
+    local_db.flush()
+
+
 def notify_management_exemption_request(
     *,
     local_db: Session,

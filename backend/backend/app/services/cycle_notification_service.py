@@ -299,6 +299,53 @@ def notify_management_enrollment_final_review(
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def notify_manager_of_enrollment_final_decision(
+    *, local_db: Session, cycle_id: int, project_name: str, project_id: int,
+    enrollment_id: int, manager_emp_id: Optional[str], approved: bool,
+    decided_by_name: str, actor_emp_id: str,
+) -> None:
+    """Enrollment-level twin of staging_notification_service.py's
+    notify_manager_of_final_decision — same chain, just for a project being
+    added to an ALREADY-EXISTING cycle: Manager exempted it, Quality
+    reaffirmed eligible on recheck, Management had the final word. The
+    Manager who started the disagreement gets told how it landed.
+
+    manager_emp_id can be missing on rows from before this field was
+    tracked consistently — skip quietly rather than notify no one and also
+    rather than error out the decision itself over a notification.
+    """
+    if not manager_emp_id:
+        return
+
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "Final decision on your exemption"
+    if approved:
+        message = (
+            f'You marked "{project_name}" exempt, but Quality reaffirmed it eligible and '
+            f"{decided_by_name} has confirmed it eligible — it will be included in this cycle."
+        )
+    else:
+        message = (
+            f'{decided_by_name} agreed with your exemption — both you and Management have '
+            f'marked "{project_name}" exempt. It will not be included in this cycle.'
+        )
+
+    local_db.add(Notification(
+        recipient_emp_id=manager_emp_id, actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_MANAGER_FINAL_DECISION", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    if EMAIL_NOTIFICATIONS_ENABLED:
+        recipient = _get_user_by_emp_id(local_db, manager_emp_id)
+        if recipient and recipient.get("email"):
+            try:
+                EmailSender.send_email(to=recipient["email"], subject=title, body=f"{message}\n\n{link}",
+                                        html_content=f"<p>{message}</p><p><a href='{link}'>View it</a></p>")
+            except Exception as e:
+                print(f"[WARN] Failed to email manager {manager_emp_id}: {e}")
+    local_db.flush()
+
+
 def notify_project_added_to_cycle(
     *,
     local_db: Session,

@@ -98,6 +98,9 @@ class EnrolledProjectResponse(BaseModel):
     manager_decided_at: Optional[datetime] = None
     quality_recheck_by: Optional[str] = None
     quality_recheck_at: Optional[datetime] = None
+    # Same plain-language conflict explanation as project_staging's
+    # StagedProjectResponse — see _enrollment_conflict_note in csat_cycles.py.
+    conflict_note: Optional[str] = None
 
     # ── Feedback — whether a survey has already gone out/come back for
     # this project in THIS cycle, so the UI can stop offering to re-send

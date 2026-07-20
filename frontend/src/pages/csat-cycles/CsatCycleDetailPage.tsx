@@ -35,8 +35,27 @@ const _PENDING_ADDITION_STATUSES = new Set([
   'pending_quality_recheck', 'pending_management_review',
 ]);
 
+// Quality/Management overrode this Manager's exemption and kept the
+// project Approved — but the Manager hasn't actually weighed in on that
+// outcome yet. addition_approved_by still holds whoever last approved it:
+// Management's emp_id right after the override, and the Manager's own
+// emp_id once they've reopened it and confirmed (or exempted, which moves
+// it out of 'approved' entirely). Until the Manager's the one who last
+// touched it, this can't be treated as genuinely ready — sending feedback
+// on a project the Manager might still veto would defeat the whole point
+// of giving them a reopen.
+function isReopenPending(p: EnrolledProject): boolean {
+  return (
+    p.addition_approval_status === 'approved'
+    && !!p.manager_decided_by
+    && !!p.quality_recheck_by
+    && p.addition_approved_by !== p.manager_emp_id
+  );
+}
+
 function getRowStatus(p: EnrolledProject): RowStatus {
   if (_PENDING_ADDITION_STATUSES.has(p.addition_approval_status)) return 'review';
+  if (isReopenPending(p)) return 'review';
   if (p.eligibility_status === 'eligible' || p.eligibility_status === 'approved') return 'ready';
   if (p.eligibility_status === 'pending_approval') return 'review';  // merged — "With manager" removed as its own bucket
   return 'not-eligible'; // exempted, declined
@@ -815,17 +834,20 @@ export const CsatCycleDetailPage: React.FC = () => {
   // second badge and the permanent workflow banner.
   const rowSubtitle = (p: EnrolledProject, status: RowStatus): string => {
     if (status === 'review') {
+      if (isReopenPending(p)) {
+        return p.conflict_note || 'Quality and Management overrode the Manager\'s exemption — awaiting their final word.';
+      }
       switch (p.addition_approval_status) {
         case 'pending_manager_review':
           // The one case that gets a distinct, unmissable tag rather than
           // plain status text — this is specifically "something Quality did
           // that now needs YOUR decision", for the Manager it's routed to.
           if (isManager && p.manager_emp_id === user?.emp_id) {
-            return `${p.enrolled_by_name || 'Quality'} marked this eligible — needs your review`;
+            return p.conflict_note || `${p.enrolled_by_name || 'Quality'} marked this eligible — needs your review`;
           }
-          return p.project_manager_name
+          return p.conflict_note || (p.project_manager_name
             ? `Sent to ${p.project_manager_name} for review`
-            : 'Sent to the project Manager for review';
+            : 'Sent to the project Manager for review');
         case 'pending_management_exemption_review':
           return p.exemption_reason
             ? `${p.enrolled_by_name || 'Quality'} requested exemption: "${p.exemption_reason}" · awaiting Management`
@@ -848,7 +870,7 @@ export const CsatCycleDetailPage: React.FC = () => {
       }
     }
     if (status === 'ready') {
-      return `Ready · added ${formatDate(p.enrolled_at)}`;
+      return p.conflict_note || `Ready · added ${formatDate(p.enrolled_at)}`;
     }
     // not-eligible
     if (isFinallyDeclined(p)) return 'Declined · marked not eligible';
@@ -1043,6 +1065,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                           || (project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id)
                           || (project.addition_approval_status === 'pending_quality_recheck' && isQuality)
                           || (project.addition_approval_status === 'pending_management_exemption_review' && isManagement)
+                          || (isReopenPending(project) && isManager && project.manager_emp_id === user?.emp_id)
                         ) ? 'Needs your review' : undefined
                     }
                   />
@@ -1058,34 +1081,39 @@ export const CsatCycleDetailPage: React.FC = () => {
                         </button>
                       )}
 
-                      {project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id && (
-                        <>
-                          <div className="flex flex-col items-center gap-1">
-                            <button
-                              disabled={chainBusyId === project.enrollment_id}
-                              onClick={() => handleChainDecide(project, 'manager', true)}
-                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                            >
-                              ✓ Eligible
-                            </button>
-                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                              final · adds to cycle
-                            </span>
-                          </div>
-                          <div className="flex flex-col items-center gap-1">
-                            <button
-                              disabled={chainBusyId === project.enrollment_id}
-                              onClick={() => handleChainDecide(project, 'manager', false)}
-                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                            >
-                              ✕ Exempt
-                            </button>
-                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                              → sends to Quality for recheck
-                            </span>
-                          </div>
-                        </>
-                      )}
+                      {(() => {
+                        const isPendingManagerReview = project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id;
+                        const isReopen = isReopenPending(project) && isManager && project.manager_emp_id === user?.emp_id;
+                        if (!isPendingManagerReview && !isReopen) return null;
+                        return (
+                          <>
+                            <div className="flex flex-col items-center gap-1">
+                              <button
+                                disabled={chainBusyId === project.enrollment_id}
+                                onClick={() => handleChainDecide(project, 'manager', true)}
+                                className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                              >
+                                ✓ Eligible
+                              </button>
+                              <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                                {isReopen ? 'keeps it in the cycle' : 'final · adds to cycle'}
+                              </span>
+                            </div>
+                            <div className="flex flex-col items-center gap-1">
+                              <button
+                                disabled={chainBusyId === project.enrollment_id}
+                                onClick={() => handleChainDecide(project, 'manager', false)}
+                                className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                              >
+                                ✕ Exempt
+                              </button>
+                              <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                                {isReopen ? 'final · removes from cycle' : '→ sends to Quality for recheck'}
+                              </span>
+                            </div>
+                          </>
+                        );
+                      })()}
 
                       {project.addition_approval_status === 'pending_quality_recheck' && isQuality && (
                         <>

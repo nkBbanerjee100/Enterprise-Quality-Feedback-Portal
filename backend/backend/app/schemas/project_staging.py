@@ -73,6 +73,11 @@ class StagedProjectResponse(BaseModel):
     decided_at: Optional[datetime] = None
     decision_remarks: Optional[str] = None
     exemption_reason: Optional[str] = None
+    # A plain-language note explaining a conflict in this project's chain —
+    # e.g. "Quality and Management chose to keep this project despite ...'s
+    # exemption" or "Quality wanted to exempt this, but Management
+    # disagreed — it's your call." None when there's no conflict to explain.
+    conflict_note: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -63,6 +63,7 @@ export interface StagedProject {
   decided_at?: string;
   decision_remarks?: string;
   exemption_reason?: string;
+  conflict_note?: string | null;
 }
 
 export interface MyProjectItem {
@@ -72,6 +73,11 @@ export interface MyProjectItem {
   status: StagingStatus | null;   // null = no staging row yet — fully actionable
   selected_by: string | null;
   exemption_reason: string | null;
+  // Set only when this Manager exempted the project and Quality+Management
+  // overrode that, keeping it Eligible anyway — lets the Manager reopen
+  // their own decision one more time (see is_reopen).
+  conflict_note: string | null;
+  is_reopen: boolean;
 }
 
 export interface SelectProjectItem {

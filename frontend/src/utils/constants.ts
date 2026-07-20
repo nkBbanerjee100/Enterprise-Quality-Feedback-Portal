@@ -19,7 +19,6 @@ export const FEEDBACK_STATUS = {
   ELIGIBLE:        'ELIGIBLE',
   DRAFT:           'DRAFT',
   SENT:            'SENT',
-  OPENED:          'OPENED',
   SUBMITTED:       'SUBMITTED',
   EXPIRED:         'EXPIRED',
   REMINDER_SENT:   'REMINDER_SENT',

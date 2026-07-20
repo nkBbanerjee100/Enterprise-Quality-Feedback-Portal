@@ -25,6 +25,7 @@ from app.services.cycle_notification_service import (
     notify_manager_enrollment_needs_review, notify_quality_enrollment_needs_recheck,
     notify_management_enrollment_exemption_request, notify_quality_of_enrollment_exemption_decision,
     notify_management_enrollment_final_review, notify_quality_role_enrollment_needs_recheck,
+    notify_manager_of_enrollment_final_decision,
 )
 from app.services.audit_service import log_action, get_client_ip
 from app.schemas.audit import AuditActions
@@ -171,6 +172,31 @@ def _feedback_map_for(db: Session, cycle_id: int, tms_ext_ids: list[int]) -> dic
     return out
 
 
+def _enrollment_conflict_note(enr: CycleProjectEnrollment, name_map: dict) -> Optional[str]:
+    """Enrollment-level twin of project_staging.py's _staging_conflict_note
+    — same two conflict shapes, same fields (this model mirrors
+    ProjectStaging's chain-tracking columns exactly).
+
+    addition_approved_by being set while still PENDING_MANAGER_REVIEW is
+    what distinguishes "Management rejected the exemption, sending it
+    here" from the ordinary "Quality enrolled it as eligible" path into
+    the same status — the latter never touches addition_approved_by at
+    all, only Manager's own manager-decide, Management's decide-exemption,
+    and the final approve/decline-addition ever do.
+    """
+    manager_name = name_map.get(enr.manager_decided_by, enr.manager_decided_by) if enr.manager_decided_by else None
+    quality_name = name_map.get(enr.enrolled_by, enr.enrolled_by) if enr.enrolled_by else None
+    management_name = name_map.get(enr.addition_approved_by, enr.addition_approved_by) if enr.addition_approved_by else None
+
+    if enr.addition_approval_status == AdditionApprovalStatus.APPROVED and enr.manager_decided_by and enr.quality_recheck_by:
+        return f"Quality and Management chose to keep this project despite {manager_name}'s exemption."
+
+    if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGER_REVIEW and enr.addition_approved_by and not enr.manager_decided_by:
+        return f"{quality_name} wanted to exempt this project, but {management_name} disagreed — it's your call."
+
+    return None
+
+
 def _enrollment_to_response(
     enr: CycleProjectEnrollment,
     project: Project,
@@ -219,6 +245,7 @@ def _enrollment_to_response(
         "quality_recheck_by": enr.quality_recheck_by,
         "quality_recheck_by_name": name_map.get(enr.quality_recheck_by, enr.quality_recheck_by) if enr.quality_recheck_by else None,
         "quality_recheck_at": enr.quality_recheck_at,
+        "conflict_note": _enrollment_conflict_note(enr, name_map),
         "feedback_request_id": (feedback_info or {}).get("feedback_request_id"),
         "feedback_status": (feedback_info or {}).get("feedback_status"),
         "pm_approval_status": (feedback_info or {}).get("pm_approval_status"),
@@ -889,6 +916,17 @@ def approve_addition(
         details={"cycle_id": cycle_id, "project_name": project.project_name if project else None},
     )
 
+    try:
+        notify_manager_of_enrollment_final_decision(
+            local_db=db, cycle_id=cycle_id, project_name=project.project_name,
+            project_id=project.id, enrollment_id=enr.id, manager_emp_id=enr.manager_emp_id,
+            approved=True, decided_by_name=current_user.get("name") or current_user["emp_id"],
+            actor_emp_id=current_user["emp_id"],
+        )
+        db.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to notify manager of final decision on enrollment {enr.id}: {e}")
+
     pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
     return _enrollment_to_response(enr, project, pm_info, current_user)
 
@@ -936,6 +974,17 @@ def decline_addition(
         details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks},
     )
 
+    try:
+        notify_manager_of_enrollment_final_decision(
+            local_db=db, cycle_id=cycle_id, project_name=project.project_name,
+            project_id=project.id, enrollment_id=enr.id, manager_emp_id=enr.manager_emp_id,
+            approved=False, decided_by_name=current_user.get("name") or current_user["emp_id"],
+            actor_emp_id=current_user["emp_id"],
+        )
+        db.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to notify manager of final decision on enrollment {enr.id}: {e}")
+
     return _enrollment_to_response(enr, project, pm_info, current_user)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -955,7 +1004,17 @@ def manager_decide_enrollment(
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
     project = db.query(Project).filter(Project.id == enr.project_id).first()
 
-    if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGER_REVIEW:
+    # Normal case: Quality enrolled it eligible, waiting on this Manager's
+    # first review. Reopen case: THIS Manager already exempted it, Quality
+    # and Management overrode that and kept it Approved anyway — but the
+    # Manager still gets the final say on their own project. Exempting here
+    # is genuinely final: everyone's already had their turn.
+    is_reopen = (
+        enr.addition_approval_status == AdditionApprovalStatus.APPROVED
+        and enr.manager_decided_by == current_user["emp_id"]
+        and enr.quality_recheck_by is not None
+    )
+    if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGER_REVIEW and not is_reopen:
         raise HTTPException(status_code=400, detail="This project isn't awaiting your review.")
     if enr.manager_emp_id != current_user["emp_id"]:
         raise HTTPException(status_code=403, detail="You can only decide on projects you're the assigned Manager for.")
@@ -967,8 +1026,18 @@ def manager_decide_enrollment(
     enr.manager_decided_at = datetime.utcnow()
 
     if payload.decision == EnrollTriageAction.EXEMPTED:
-        enr.addition_approval_status = AdditionApprovalStatus.PENDING_QUALITY_RECHECK
-        enr.exemption_reason = payload.exemption_reason
+        if is_reopen:
+            # Final, full stop — Quality and Management already weighed in
+            # once; this isn't sent back for another round.
+            enr.addition_approval_status = AdditionApprovalStatus.DECLINED
+            enr.addition_approved_by = current_user["emp_id"]
+            enr.addition_approved_at = datetime.utcnow()
+            enr.addition_decision_remarks = payload.exemption_reason
+            enr.eligibility_status = EligibilityStatus.EXEMPTED
+            enr.exemption_reason = payload.exemption_reason
+        else:
+            enr.addition_approval_status = AdditionApprovalStatus.PENDING_QUALITY_RECHECK
+            enr.exemption_reason = payload.exemption_reason
     else:
         enr.addition_approval_status = AdditionApprovalStatus.APPROVED
         enr.addition_approved_by = current_user["emp_id"]
@@ -1081,10 +1150,11 @@ def decide_enrollment_exemption(
 ):
     """
     approve=True  -> confirms the exemption; final Declined/Exempted.
-    approve=False -> rejects the exemption; project is now Approved
-    (eligible for this cycle) immediately — same list as every other
-    approved project, neither added nor removed automatically. No Manager
-    hand-off, no further review: this is Management's final call either way.
+    approve=False -> rejects the exemption; Quality wanted this project
+    exempt but Management disagrees — that's a genuine conflict, so it goes
+    to the project's own Manager to make the actual call (or straight to
+    Approved if it somehow has no Manager in TMS at all). Whenever Quality
+    and Management disagree, the Manager is always the tie-breaker.
     """
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
     project = db.query(Project).filter(Project.id == enr.project_id).first()
@@ -1103,16 +1173,19 @@ def decide_enrollment_exemption(
         enr.eligibility_status = EligibilityStatus.EXEMPTED
         # Quality's original reason stands — remarks are supplementary context.
     else:
-        # Still worth resolving the PM for display purposes, but it no
-        # longer gates anything — the project goes Approved either way,
-        # Management's word is final.
         try:
             pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
         except Exception as e:
             print(f"[WARN] Could not resolve PM for enrollment {enr.id}: {e}")
         enr.exemption_reason = None
-        enr.addition_approval_status = AdditionApprovalStatus.APPROVED
-        enr.manager_emp_id = pm_info["emp_id"] if pm_info else None
+        if pm_info:
+            enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGER_REVIEW
+            enr.manager_emp_id = pm_info["emp_id"]
+        else:
+            # No Manager on file at all — nobody left to break the tie, so
+            # it goes straight to Approved rather than getting stuck.
+            enr.addition_approval_status = AdditionApprovalStatus.APPROVED
+            enr.manager_emp_id = None
 
     db.commit()
     db.refresh(enr)
@@ -1132,6 +1205,13 @@ def decide_enrollment_exemption(
             exemption_approved=payload.approve, decided_by_name=decided_by_name,
             actor_emp_id=current_user["emp_id"], remarks=payload.remarks,
         )
+        if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGER_REVIEW:
+            notify_manager_enrollment_needs_review(
+                local_db=db, manager_emp_id=enr.manager_emp_id, cycle_id=cycle_id,
+                project_name=project.project_name, project_id=project.id,
+                enrollment_id=enr.id, enrolled_by_name=decided_by_name,
+                actor_emp_id=current_user["emp_id"],
+            )
         db.commit()
     except Exception as e:
         print(f"[WARN] Failed to notify for exemption decision on enrollment {enr.id}: {e}")
