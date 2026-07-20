@@ -126,29 +126,39 @@ function ReviewRow({
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <button
-            disabled={busy}
-            onClick={() => onDecide(item, item.action_type === 'exemption' ? false : true)}
-            style={{
-              fontSize: 12.5, fontWeight: 600, color: '#fff', background: BRAND.green,
-              border: 'none', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
-              opacity: busy ? 0.5 : 1,
-            }}
-          >
-            {item.action_type === 'exemption' ? 'Reject Exemption' : 'Approve'}
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => item.action_type === 'exemption' ? onDecide(item, true) : setShowDecline(s => !s)}
-            style={{
-              fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff',
-              border: '1px solid #E5E7EB', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
-              opacity: busy ? 0.5 : 1,
-            }}
-          >
-            {item.action_type === 'exemption' ? 'Approve Exemption' : 'Decline'}
-          </button>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexShrink: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <button
+              disabled={busy}
+              onClick={() => onDecide(item, item.action_type === 'exemption' ? false : true)}
+              style={{
+                fontSize: 12.5, fontWeight: 600, color: '#fff', background: BRAND.green,
+                border: 'none', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.5 : 1, whiteSpace: 'nowrap',
+              }}
+            >
+              {item.action_type === 'exemption' ? 'Reject Exemption' : 'Approve'}
+            </button>
+            <span style={{ fontSize: 10, color: BRAND.textLight, textAlign: 'center', lineHeight: 1.3, maxWidth: 110 }}>
+              {item.action_type === 'exemption' ? 'final · makes it eligible' : 'final · adds to cycle'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <button
+              disabled={busy}
+              onClick={() => item.action_type === 'exemption' ? onDecide(item, true) : setShowDecline(s => !s)}
+              style={{
+                fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff',
+                border: '1px solid #E5E7EB', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.5 : 1, whiteSpace: 'nowrap',
+              }}
+            >
+              {item.action_type === 'exemption' ? 'Approve Exemption' : 'Decline'}
+            </button>
+            <span style={{ fontSize: 10, color: BRAND.textLight, textAlign: 'center', lineHeight: 1.3, maxWidth: 110 }}>
+              {item.action_type === 'exemption' ? 'final · removes from cycle' : 'final · removes from cycle · reason required'}
+            </span>
+          </div>
         </div>
       </div>
 

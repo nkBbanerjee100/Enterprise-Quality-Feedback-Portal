@@ -28,6 +28,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageWrapper } from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { ExemptConfirmModal } from '../../components/common/ExemptConfirmModal';
 import { projectStagingApi } from '../../api/project-staging.api';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
@@ -37,21 +38,15 @@ import { currentHalf } from '../../utils/half-year';
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 const currentYear = new Date().getFullYear();
 
-// ─── Mandatory exemption reason — a tiny blocking prompt shared by every
-// "Exempt" action anywhere in this chain (Quality's initial pass, a
-// Manager's decision, Quality's recheck, Management's decline). Keeping it
-// as one small function rather than a modal per call site avoids four
-// near-identical pieces of state/markup for what's fundamentally the same
-// interaction everywhere. ─────────────────────────────────────────────────
-function askExemptionReason(projectName: string): string | null {
-  const reason = window.prompt(`Exemption reason for "${projectName}" (required):`);
-  if (reason === null) return null; // cancelled
-  const trimmed = reason.trim();
-  if (!trimmed) {
-    window.alert('An exemption reason is required to mark a project exempt.');
-    return null;
-  }
-  return trimmed;
+// ─── One shared shape for "open the exempt-confirm modal, then run this
+// callback with whatever it collected" — every Exempt / Approve Exemption
+// button in this file funnels through it instead of window.prompt. ────────
+export interface ExemptConfirmRequest {
+  projectName: string;
+  message: string;
+  requireReason: boolean;
+  confirmLabel: string;
+  onConfirm: (reason?: string) => void;
 }
 
 // ─── Review Queue — one card at a time, big satisfying decisions, a little
@@ -66,6 +61,7 @@ function ReviewQueueModal({
   const [index, setIndex] = useState(0);
   const [exiting, setExiting] = useState<'approve' | 'decline' | null>(null);
   const [celebrate, setCelebrate] = useState(false);
+  const [confirmingDecline, setConfirmingDecline] = useState(false);
 
   const decideMutation = useMutation({
     mutationFn: ({ stagingId, approve, remarks }: { stagingId: number; approve: boolean; remarks?: string }) =>
@@ -90,31 +86,32 @@ function ReviewQueueModal({
     setExiting(null);
   };
 
-  const handleDecide = (approve: boolean) => {
+  const runDecision = (approve: boolean, remarks?: string) => {
     if (!current || exiting) return;
-
-    let remarks: string | undefined;
-    if (!approve) {
-      const reason = askExemptionReason(current.project_name);
-      if (!reason) return; // cancelled / empty — stay on this card
-      remarks = reason;
-    }
-
     setExiting(approve ? 'approve' : 'decline');
     decideMutation.mutate({ stagingId: current.staging_id, approve, remarks });
     window.setTimeout(advance, 280);
   };
 
+  const handleDecide = (approve: boolean) => {
+    if (!current || exiting) return;
+    if (!approve) {
+      setConfirmingDecline(true);
+      return;
+    }
+    runDecision(true);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (celebrate) return;
+      if (celebrate || confirmingDecline) return;
       if (e.key.toLowerCase() === 'a') handleDecide(true);
       if (e.key.toLowerCase() === 'd') handleDecide(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, exiting, celebrate]);
+  }, [index, exiting, celebrate, confirmingDecline]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -220,20 +217,37 @@ function ReviewQueueModal({
           </div>
         )}
       </div>
+
+      {confirmingDecline && current && (
+        <ExemptConfirmModal
+          projectName={current.project_name}
+          message="This finalizes the project as Exempt — it will be removed from this cycle. This decision is final."
+          requireReason
+          confirmLabel="Yes, Decline"
+          onCancel={() => setConfirmingDecline(false)}
+          onConfirm={(reason) => { setConfirmingDecline(false); runDecision(false, reason); }}
+        />
+      )}
     </div>
   );
 }
 
 // ─── Candidate row — active or completed, with inline triage buttons ─────────
-function CandidateRow({ candidate, onTriage, busy }: {
+function CandidateRow({ candidate, onTriage, busy, onRequestExemptConfirm }: {
   candidate: StagingCandidate; onTriage: (action: TriageAction, exemptionReason?: string) => void; busy: boolean;
+  onRequestExemptConfirm: (req: ExemptConfirmRequest) => void;
 }) {
   const status = candidate.staging_status;
   const statusMeta = status && status !== 'eligible' ? STAGING_STATUS_META[status] : null;
 
   const handleExempt = () => {
-    const reason = askExemptionReason(candidate.project_name);
-    if (reason) onTriage('exempted', reason);
+    onRequestExemptConfirm({
+      projectName: candidate.project_name,
+      message: 'This sends the project to Management to approve or reject the exemption.',
+      requireReason: true,
+      confirmLabel: 'Exempt',
+      onConfirm: (reason) => onTriage('exempted', reason),
+    });
   };
 
   return (
@@ -284,14 +298,24 @@ function CandidateRow({ candidate, onTriage, busy }: {
 // row shape for both "Awaiting your review" (Manager) and "Back with you to
 // recheck" (Quality) sections. ────────────────────────────────────────────
 function PendingDecisionRow({
-  item, busy, onDecide, context,
+  item, busy, onDecide, context, onRequestExemptConfirm,
 }: {
   item: StagedProject; busy: boolean; onDecide: (decision: TriageAction, exemptionReason?: string) => void;
   context: 'manager' | 'quality-recheck';
+  onRequestExemptConfirm: (req: ExemptConfirmRequest) => void;
 }) {
+  const isRecheck = context === 'quality-recheck';
+
   const handleExempt = () => {
-    const reason = askExemptionReason(item.project_name);
-    if (reason) onDecide('exempted', reason);
+    onRequestExemptConfirm({
+      projectName: item.project_name,
+      message: isRecheck
+        ? 'This confirms the Manager\u2019s exemption — the project will be removed from this cycle for good.'
+        : 'This sends the project to Quality to recheck before anything is finalized.',
+      requireReason: true,
+      confirmLabel: isRecheck ? 'Approve Exemption' : 'Exempt',
+      onConfirm: (reason) => onDecide('exempted', reason),
+    });
   };
 
   return (
@@ -304,21 +328,43 @@ function PendingDecisionRow({
             : `Exempted by ${item.manager_decided_by ?? 'the Manager'}${item.exemption_reason ? `: "${item.exemption_reason}"` : ''}`}
         </p>
       </div>
-      <div className="flex items-center gap-1.5 flex-shrink-0">
-        <button
-          disabled={busy}
-          onClick={() => onDecide('eligible')}
-          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-        >
-          ✓ Eligible
-        </button>
-        <button
-          disabled={busy}
-          onClick={handleExempt}
-          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-        >
-          ✕ Exempt
-        </button>
+      <div className="flex items-start gap-1.5 flex-shrink-0">
+        <div className="flex flex-col items-center gap-1">
+          <button
+            disabled={busy}
+            onClick={() => onDecide('eligible')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+          >
+            {isRecheck ? 'Reject Exemption' : '✓ Eligible'}
+          </button>
+          {isRecheck ? (
+            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+              → sends to Management for final call
+            </span>
+          ) : context === 'manager' && (
+            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+              final · adds to cycle
+            </span>
+          )}
+        </div>
+        <div className="flex flex-col items-center gap-1">
+          <button
+            disabled={busy}
+            onClick={handleExempt}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+          >
+            {isRecheck ? 'Approve Exemption' : '✕ Exempt'}
+          </button>
+          {isRecheck ? (
+            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+              final · removes from cycle
+            </span>
+          ) : context === 'manager' && (
+            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+              → sends to Quality for recheck
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -340,6 +386,7 @@ export const SelectProjectsPage: React.FC = () => {
   const [reviewQueue, setReviewQueue] = useState<StagedProject[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [busyStagingId, setBusyStagingId] = useState<number | null>(null);
+  const [exemptConfirm, setExemptConfirm] = useState<ExemptConfirmRequest | null>(null);
 
   const isQuality = user?.role === UserRole.QUALITY;
   const isManagement = user?.role === UserRole.MANAGEMENT;
@@ -400,7 +447,7 @@ export const SelectProjectsPage: React.FC = () => {
     queryFn: () => projectStagingApi.listPool(),
   });
 
-  const { data: myProjects, isLoading: myProjectsLoading } = useQuery({
+  const { data: myProjects, isLoading: myProjectsLoading, isError: myProjectsError, error: myProjectsErrorObj } = useQuery({
     queryKey: ['my-projects'],
     queryFn: () => projectStagingApi.listMyProjects(),
     enabled: isManagerRole,
@@ -510,6 +557,14 @@ export const SelectProjectsPage: React.FC = () => {
             </div>
             {myProjectsLoading ? (
               <LoadingSpinner text="Loading..." />
+            ) : myProjectsError ? (
+              <div className="px-5 py-8 text-center">
+                <p className="text-sm text-red-600 font-medium">Couldn't load your projects.</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {(myProjectsErrorObj as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+                    || 'Try refreshing the page. If this keeps happening, check the backend logs.'}
+                </p>
+              </div>
             ) : (myProjects ?? []).length === 0 ? (
               <p className="px-5 py-8 text-sm text-gray-400 text-center">No projects are assigned to you.</p>
             ) : (
@@ -559,24 +614,37 @@ export const SelectProjectsPage: React.FC = () => {
                       )}
                     </div>
                     {actionable ? (
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          disabled={busyId === item.project_ext_id}
-                          onClick={() => decide('eligible')}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          ✓ Eligible
-                        </button>
-                        <button
-                          disabled={busyId === item.project_ext_id}
-                          onClick={() => {
-                            const reason = askExemptionReason(item.project_name);
-                            if (reason) decide('exempted', reason);
-                          }}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          ✕ Exempt
-                        </button>
+                      <div className="flex items-start gap-1.5 flex-shrink-0">
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            disabled={busyId === item.project_ext_id}
+                            onClick={() => decide('eligible')}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ✓ Eligible
+                          </button>
+                          <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                            final · adds to cycle
+                          </span>
+                        </div>
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            disabled={busyId === item.project_ext_id}
+                            onClick={() => setExemptConfirm({
+                              projectName: item.project_name,
+                              message: 'This sends the project to Quality to recheck before anything is finalized.',
+                              requireReason: true,
+                              confirmLabel: 'Exempt',
+                              onConfirm: (reason) => decide('exempted', reason),
+                            })}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            ✕ Exempt
+                          </button>
+                          <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                            → sends to Quality for recheck
+                          </span>
+                        </div>
                       </div>
                     ) : meta && (
                       <span
@@ -646,27 +714,43 @@ export const SelectProjectsPage: React.FC = () => {
                       </p>
                     </div>
                     {isManagement ? (
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          disabled={busyStagingId === p.staging_id}
-                          onClick={() => {
-                            setBusyStagingId(p.staging_id);
-                            decideExemptionMutation.mutate({ stagingId: p.staging_id, approve: false });
-                          }}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          Reject Exemption
-                        </button>
-                        <button
-                          disabled={busyStagingId === p.staging_id}
-                          onClick={() => {
-                            setBusyStagingId(p.staging_id);
-                            decideExemptionMutation.mutate({ stagingId: p.staging_id, approve: true });
-                          }}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          Approve Exemption
-                        </button>
+                      <div className="flex items-start gap-1.5 flex-shrink-0">
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            disabled={busyStagingId === p.staging_id}
+                            onClick={() => {
+                              setBusyStagingId(p.staging_id);
+                              decideExemptionMutation.mutate({ stagingId: p.staging_id, approve: false });
+                            }}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            Reject Exemption
+                          </button>
+                          <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+                            → final · makes it eligible
+                          </span>
+                        </div>
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            disabled={busyStagingId === p.staging_id}
+                            onClick={() => setExemptConfirm({
+                              projectName: p.project_name,
+                              message: 'This confirms the exemption Quality requested — the project will be removed from this cycle for good.',
+                              requireReason: false,
+                              confirmLabel: 'Approve Exemption',
+                              onConfirm: () => {
+                                setBusyStagingId(p.staging_id);
+                                decideExemptionMutation.mutate({ stagingId: p.staging_id, approve: true });
+                              },
+                            })}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                          >
+                            Approve Exemption
+                          </button>
+                          <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+                            → final · removes from cycle
+                          </span>
+                        </div>
                       </div>
                     ) : (
                       <span
@@ -719,6 +803,7 @@ export const SelectProjectsPage: React.FC = () => {
                       item={p}
                       context="quality-recheck"
                       busy={busyStagingId === p.staging_id}
+                      onRequestExemptConfirm={setExemptConfirm}
                       onDecide={(decision, reason) => {
                         setBusyStagingId(p.staging_id);
                         qualityRecheckMutation.mutate({ stagingId: p.staging_id, decision, reason });
@@ -838,6 +923,7 @@ export const SelectProjectsPage: React.FC = () => {
                         candidate={c}
                         busy={busyId === c.project_ext_id}
                         onTriage={(action, reason) => handleTriage(c.project_ext_id, action, reason)}
+                        onRequestExemptConfirm={setExemptConfirm}
                       />
                     ))
                   )}
@@ -883,6 +969,7 @@ export const SelectProjectsPage: React.FC = () => {
                         candidate={c}
                         busy={busyId === c.project_ext_id}
                         onTriage={(action, reason) => handleTriage(c.project_ext_id, action, reason)}
+                        onRequestExemptConfirm={setExemptConfirm}
                       />
                     ))
                   )}
@@ -921,6 +1008,17 @@ export const SelectProjectsPage: React.FC = () => {
           items={reviewQueue}
           onClose={() => { setReviewQueue(null); invalidate(); }}
           onAllDone={() => invalidate()}
+        />
+      )}
+
+      {exemptConfirm && (
+        <ExemptConfirmModal
+          projectName={exemptConfirm.projectName}
+          message={exemptConfirm.message}
+          requireReason={exemptConfirm.requireReason}
+          confirmLabel={exemptConfirm.confirmLabel}
+          onCancel={() => setExemptConfirm(null)}
+          onConfirm={(reason) => { const cb = exemptConfirm.onConfirm; setExemptConfirm(null); cb(reason); }}
         />
       )}
     </PageWrapper>

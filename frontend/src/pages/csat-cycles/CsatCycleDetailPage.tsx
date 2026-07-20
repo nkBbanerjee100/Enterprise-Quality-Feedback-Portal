@@ -6,6 +6,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageWrapper } from '../../components/layout/PageWrapper';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { ExemptConfirmModal, ExemptConfirmRequest } from '../../components/common/ExemptConfirmModal';
 import { csatCyclesApi } from '../../api/csat-cycles.api';
 import { projectsApi } from '../../api/projects.api';
 import { projectStagingApi } from '../../api/project-staging.api';
@@ -17,20 +18,6 @@ import { deriveStatus } from '../projects/ProjectListPage';
 import { currentHalf, precedingHalf, halfDates } from '../../utils/half-year';
 
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
-
-// ─── Mandatory exemption reason — same small blocking prompt used
-// throughout SelectProjectsPage.tsx for every "Exempt" action anywhere in
-// the chain. Kept as one function rather than a modal per call site. ──────
-function askExemptionReason(projectName: string): string | null {
-  const reason = window.prompt(`Exemption reason for "${projectName}" (required):`);
-  if (reason === null) return null; // cancelled
-  const trimmed = reason.trim();
-  if (!trimmed) {
-    window.alert('An exemption reason is required to mark a project exempt.');
-    return null;
-  }
-  return trimmed;
-}
 
 // ─── Unified row status ─────────────────────────────────────────────────────
 // A project row has two underlying flags — addition_approval_status and
@@ -215,6 +202,7 @@ function EnrollModal({
   const [lastAction, setLastAction] = useState<{ id: number; name: string; action: 'eligible' | 'exempted' } | null>(null);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [exemptConfirm, setExemptConfirm] = useState<ExemptConfirmRequest | null>(null);
 
   const triage = async (tmsProjectId: number, projectName: string, action: 'eligible' | 'exempted', exemptionReason?: string) => {
     setBusyId(tmsProjectId);
@@ -355,10 +343,15 @@ function EnrollModal({
                         </button>
                         <button
                           disabled={busyId === p.project_id}
-                          onClick={() => {
-                            const reason = askExemptionReason(p.project_name);
-                            if (reason) triage(p.project_id, p.project_name, 'exempted', reason);
-                          }}
+                          onClick={() => setExemptConfirm({
+                            projectName: p.project_name,
+                            message: isManagerRole
+                              ? 'This sends the project to Quality to recheck before anything is finalized.'
+                              : 'This sends the project to Management to approve or reject the exemption.',
+                            requireReason: true,
+                            confirmLabel: 'Exempt',
+                            onConfirm: (reason) => triage(p.project_id, p.project_name, 'exempted', reason),
+                          })}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
                         >
                           ✕ Exempt
@@ -408,10 +401,15 @@ function EnrollModal({
                         </button>
                         <button
                           disabled={busyId === p.project_id}
-                          onClick={() => {
-                            const reason = askExemptionReason(p.project_name);
-                            if (reason) triage(p.project_id, p.project_name, 'exempted', reason);
-                          }}
+                          onClick={() => setExemptConfirm({
+                            projectName: p.project_name,
+                            message: isManagerRole
+                              ? 'This sends the project to Quality to recheck before anything is finalized.'
+                              : 'This sends the project to Management to approve or reject the exemption.',
+                            requireReason: true,
+                            confirmLabel: 'Exempt',
+                            onConfirm: (reason) => triage(p.project_id, p.project_name, 'exempted', reason),
+                          })}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
                         >
                           ✕ Exempt
@@ -440,6 +438,17 @@ function EnrollModal({
           </button>
         </div>
       </div>
+
+      {exemptConfirm && (
+        <ExemptConfirmModal
+          projectName={exemptConfirm.projectName}
+          message={exemptConfirm.message}
+          requireReason={exemptConfirm.requireReason}
+          confirmLabel={exemptConfirm.confirmLabel}
+          onCancel={() => setExemptConfirm(null)}
+          onConfirm={(reason) => { const cb = exemptConfirm.onConfirm; setExemptConfirm(null); cb(reason); }}
+        />
+      )}
     </div>
   );
 }
@@ -661,6 +670,7 @@ export const CsatCycleDetailPage: React.FC = () => {
   const [approvalTarget, setApprovalTarget] = useState<EnrolledProject | null>(null);
   const [additionTarget, setAdditionTarget] = useState<EnrolledProject | null>(null);
   const [chainBusyId, setChainBusyId] = useState<number | null>(null);
+  const [exemptConfirm, setExemptConfirm] = useState<ExemptConfirmRequest | null>(null);
 
   const { data: cycle, isLoading: cycleLoading } = useQuery({
     queryKey: ['csat-cycle', cycleId],
@@ -701,18 +711,12 @@ export const CsatCycleDetailPage: React.FC = () => {
   // exemption, and Management approving/rejecting an exemption request.
   // Each mirrors the equivalent action on SelectProjectsPage.tsx exactly,
   // just scoped to an enrollment instead of a staging row.
-  const handleChainDecide = async (
+  const runChainDecide = async (
     project: EnrolledProject,
     kind: 'manager' | 'quality-recheck' | 'exemption',
     approveOrEligible: boolean,
+    reason?: string,
   ) => {
-    let reason: string | undefined;
-    const needsReason = (kind !== 'exemption' && !approveOrEligible) || (kind === 'exemption' && approveOrEligible);
-    if (needsReason) {
-      const r = askExemptionReason(project.project_name);
-      if (!r) return; // cancelled / empty
-      reason = r;
-    }
     setChainBusyId(project.enrollment_id);
     try {
       if (kind === 'manager') {
@@ -733,6 +737,34 @@ export const CsatCycleDetailPage: React.FC = () => {
     } finally {
       setChainBusyId(null);
     }
+  };
+
+  const handleChainDecide = (
+    project: EnrolledProject,
+    kind: 'manager' | 'quality-recheck' | 'exemption',
+    approveOrEligible: boolean,
+  ) => {
+    const needsReason = (kind !== 'exemption' && !approveOrEligible) || (kind === 'exemption' && approveOrEligible);
+    if (!needsReason) {
+      runChainDecide(project, kind, approveOrEligible);
+      return;
+    }
+
+    const isRecheckApprove = kind === 'quality-recheck' && !approveOrEligible;
+    const isExemptionApprove = kind === 'exemption' && approveOrEligible;
+    setExemptConfirm({
+      projectName: project.project_name,
+      message: isRecheckApprove
+        ? 'This confirms the Manager\u2019s exemption — the project will be removed from this cycle for good.'
+        : isExemptionApprove
+          ? 'This confirms the exemption Quality requested — the project will be removed from this cycle for good.'
+          : kind === 'manager'
+            ? 'This sends the project to Quality to recheck before anything is finalized.'
+            : 'This sends the project to Management to approve or reject the exemption.',
+      requireReason: !isExemptionApprove, // Management's Approve Exemption reuses Quality's original reason — no new one needed
+      confirmLabel: isRecheckApprove || isExemptionApprove ? 'Approve Exemption' : 'Exempt',
+      onConfirm: (reason) => runChainDecide(project, kind, approveOrEligible, reason),
+    });
   };
 
   // Enrolled TMS IDs — used to exclude already-enrolled projects from the Add modal.
@@ -1016,7 +1048,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                   />
 
                   {canManage && (
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <div className="flex items-start gap-1.5 flex-shrink-0">
                       {status === 'review' && project.can_approve_addition && (
                         <button
                           onClick={() => setAdditionTarget(project)}
@@ -1028,58 +1060,88 @@ export const CsatCycleDetailPage: React.FC = () => {
 
                       {project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id && (
                         <>
-                          <button
-                            disabled={chainBusyId === project.enrollment_id}
-                            onClick={() => handleChainDecide(project, 'manager', true)}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            ✓ Eligible
-                          </button>
-                          <button
-                            disabled={chainBusyId === project.enrollment_id}
-                            onClick={() => handleChainDecide(project, 'manager', false)}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            ✕ Exempt
-                          </button>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'manager', true)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              ✓ Eligible
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                              final · adds to cycle
+                            </span>
+                          </div>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'manager', false)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              ✕ Exempt
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                              → sends to Quality for recheck
+                            </span>
+                          </div>
                         </>
                       )}
 
                       {project.addition_approval_status === 'pending_quality_recheck' && isQuality && (
                         <>
-                          <button
-                            disabled={chainBusyId === project.enrollment_id}
-                            onClick={() => handleChainDecide(project, 'quality-recheck', true)}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            ✓ Eligible
-                          </button>
-                          <button
-                            disabled={chainBusyId === project.enrollment_id}
-                            onClick={() => handleChainDecide(project, 'quality-recheck', false)}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            ✕ Exempt
-                          </button>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'quality-recheck', true)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              Reject Exemption
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+                              → sends to Management for final call
+                            </span>
+                          </div>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'quality-recheck', false)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              Approve Exemption
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+                              final · removes from cycle
+                            </span>
+                          </div>
                         </>
                       )}
 
                       {project.addition_approval_status === 'pending_management_exemption_review' && isManagement && (
                         <>
-                          <button
-                            disabled={chainBusyId === project.enrollment_id}
-                            onClick={() => handleChainDecide(project, 'exemption', false)}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            Reject Exemption
-                          </button>
-                          <button
-                            disabled={chainBusyId === project.enrollment_id}
-                            onClick={() => handleChainDecide(project, 'exemption', true)}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                          >
-                            Approve Exemption
-                          </button>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'exemption', false)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              Reject Exemption
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+                              → final · makes it eligible
+                            </span>
+                          </div>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'exemption', true)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              Approve Exemption
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
+                              → final · removes from cycle
+                            </span>
+                          </div>
                         </>
                       )}
 
@@ -1139,6 +1201,16 @@ export const CsatCycleDetailPage: React.FC = () => {
           cycleId={cycleId}
           onClose={() => setAdditionTarget(null)}
           onDone={() => { setAdditionTarget(null); invalidate(); }}
+        />
+      )}
+      {exemptConfirm && (
+        <ExemptConfirmModal
+          projectName={exemptConfirm.projectName}
+          message={exemptConfirm.message}
+          requireReason={exemptConfirm.requireReason}
+          confirmLabel={exemptConfirm.confirmLabel}
+          onCancel={() => setExemptConfirm(null)}
+          onConfirm={(reason) => { const cb = exemptConfirm.onConfirm; setExemptConfirm(null); cb(reason); }}
         />
       )}
     </PageWrapper>

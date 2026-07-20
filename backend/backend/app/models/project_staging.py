@@ -44,12 +44,20 @@ from app.models import Base
 
 
 class StagingStatus(str, enum.Enum):
-    PENDING_MANAGEMENT_EXEMPTION_REVIEW = "pending_management_exemption_review"  # Quality requested exempt; Management approves/rejects the exemption
-    PENDING_MANAGER_REVIEW = "pending_manager_review"        # Quality said eligible (or Management rejected an exemption); waiting on the project's Manager
-    PENDING_QUALITY_RECHECK = "pending_quality_recheck"      # Manager exempted (with reason); back to Quality
-    PENDING_MANAGEMENT_REVIEW = "pending_management_review"  # Quality reaffirmed eligible after a Manager exemption; Management has the final call
+    PENDING_MANAGEMENT_EXEMPTION_REVIEW = "pending_management_exemption_review"  # Quality requested exempt; Management approves (final Exempt) or rejects (straight to Eligible) the exemption — no Manager hand-off either way
+    PENDING_MANAGER_REVIEW = "pending_manager_review"        # Quality said eligible; waiting on the project's Manager — the Manager's decision here is FINAL
     ELIGIBLE = "eligible"      # final — ready for the cycle
     EXEMPTED = "exempted"      # final — excluded; always carries exemption_reason
+    # Legacy values — no longer reachable from new decisions as of the fix
+    # that made the Manager's PENDING_MANAGER_REVIEW call final. Previously
+    # a Manager's exemption bounced to Quality (PENDING_QUALITY_RECHECK),
+    # who could reaffirm eligible and send it to Management
+    # (PENDING_MANAGEMENT_REVIEW) — a three-role ping-pong that could take
+    # two extra round trips to resolve. Kept only so pre-existing rows
+    # already in one of these states still deserialize/display correctly;
+    # /quality-recheck and /decide remain available to resolve them.
+    PENDING_QUALITY_RECHECK = "pending_quality_recheck"
+    PENDING_MANAGEMENT_REVIEW = "pending_management_review"
 
 
 class ProjectStaging(Base):

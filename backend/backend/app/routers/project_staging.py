@@ -608,9 +608,11 @@ def decide_exemption_request(
 ):
     """
     approve=True  -> confirms the exemption; final Exempt.
-    approve=False -> rejects the exemption; project is now Eligible and
-    routed to its own Manager for review (or straight to Eligible if it has
-    no Manager in TMS), same as if Quality had marked it Eligible outright.
+    approve=False -> rejects the exemption; project is now Eligible
+    immediately — appended to the ready-for-the-cycle list, same as any
+    other eligible project (neither added nor removed automatically, just
+    ready like the rest). No Manager hand-off, no further review: this is
+    Management's final call on the exemption request either way.
     """
     staging_row = db.query(ProjectStaging).filter(ProjectStaging.id == staging_id).first()
     if not staging_row:
@@ -630,6 +632,9 @@ def decide_exemption_request(
         # Quality's original reason stands — Management approved it as-is;
         # any remarks are just supplementary context, not a replacement.
     else:
+        # Still worth resolving the PM for display purposes (who the
+        # project's Manager is), but it no longer gates anything — the
+        # project goes Eligible either way, Management's word is final.
         pm_info = None
         try:
             pm_info = get_project_manager(int(staging_row.project_ext_id), tms_db)
@@ -637,12 +642,8 @@ def decide_exemption_request(
             print(f"[WARN] Could not resolve PM for staged project {staging_row.project_ext_id}: {e}")
 
         staging_row.exemption_reason = None
-        if pm_info:
-            staging_row.status = StagingStatus.PENDING_MANAGER_REVIEW
-            staging_row.manager_emp_id = pm_info["emp_id"]
-        else:
-            staging_row.status = StagingStatus.ELIGIBLE
-            staging_row.manager_emp_id = None
+        staging_row.status = StagingStatus.ELIGIBLE
+        staging_row.manager_emp_id = pm_info["emp_id"] if pm_info else None
 
     db.commit()
     db.refresh(staging_row)
@@ -668,16 +669,6 @@ def decide_exemption_request(
             actor_emp_id=current_user["emp_id"],
             remarks=payload.remarks,
         )
-        if staging_row.status == StagingStatus.PENDING_MANAGER_REVIEW:
-            notify_manager_project_needs_review(
-                local_db=db,
-                manager_emp_id=staging_row.manager_emp_id,
-                project_name=project.project_name,
-                project_id=project.id,
-                staging_id=staging_row.id,
-                selected_by_name=decided_by_name,
-                actor_emp_id=current_user["emp_id"],
-            )
         db.commit()
     except Exception as e:
         print(f"[WARN] Failed to notify for exemption decision on staging {staging_row.id}: {e}")
@@ -1165,7 +1156,8 @@ def create_cycle_from_staging(
             # pending values are the same literal strings by design, so this
             # is a direct 1:1 carry-over.
             elig_status = EligibilityStatus.ELIGIBLE
-            addition_status = AdditionApprovalStatus(staging_row.status.value)
+            status_str = staging_row.status.value if hasattr(staging_row.status, "value") else staging_row.status
+            addition_status = AdditionApprovalStatus(status_str)
             remarks = None
         else:  # ELIGIBLE
             elig_status = EligibilityStatus.ELIGIBLE

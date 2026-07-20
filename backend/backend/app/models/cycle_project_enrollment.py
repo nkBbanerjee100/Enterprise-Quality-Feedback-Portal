@@ -24,9 +24,9 @@ class AdditionApprovalStatus(str, enum.Enum):
     """
     Separate from EligibilityStatus / the exemption-approval flow above.
     Gates the *addition* of a project to a cycle — mirrors the exact same
-    Quality -> Manager -> Quality -> Management chain as the pre-cycle
-    project_staging pool (see app/models/project_staging.py), just scoped
-    to a project being added to an ALREADY-EXISTING cycle instead:
+    Quality -> Manager chain as the pre-cycle project_staging pool (see
+    app/models/project_staging.py), just scoped to a project being added to
+    an ALREADY-EXISTING cycle instead:
 
       Quality/Management enrolls a project:
         eligible -> pending_manager_review (project's own Manager reviews)
@@ -34,26 +34,29 @@ class AdditionApprovalStatus(str, enum.Enum):
                     (Management approves/rejects the exemption)
       Management decides an exemption request:
         approve -> final DECLINED
-        reject  -> pending_manager_review (now eligible; PM reviews)
-      The project's Manager decides (pending_manager_review):
-        eligible -> final APPROVED — no further review needed
-        exempted -> mandatory reason; pending_quality_recheck
-      Quality rechecks (pending_quality_recheck):
+        reject  -> final APPROVED, straight onto the eligible list — no
+                   Manager hand-off, Management's reject IS the decision
+      The project's Manager decides (pending_manager_review, reached only
+      via Quality marking eligible directly) — FINAL, no further review:
+        eligible -> final APPROVED
         exempted -> mandatory reason; final DECLINED
-        eligible -> pending_management_review
-      Management's final call (pending_management_review):
-        approve -> final APPROVED
-        decline -> mandatory reason; final DECLINED
 
     A Manager adding one of their OWN projects directly (see enroll_projects)
     skips this whole chain — instantly APPROVED, no review needed.
+
+    PENDING_QUALITY_RECHECK and PENDING_MANAGEMENT_REVIEW are legacy values
+    only — no longer set by new code. Previously a Manager's exemption
+    bounced to Quality, who could reaffirm eligible and send it to
+    Management for a second final call; that three-role ping-pong is gone,
+    the Manager's own call is now final. Kept so pre-existing rows already
+    in one of these states still deserialize/display correctly.
     """
     PENDING_MANAGEMENT_EXEMPTION_REVIEW = "pending_management_exemption_review"
     PENDING_MANAGER_REVIEW = "pending_manager_review"
-    PENDING_QUALITY_RECHECK = "pending_quality_recheck"
-    PENDING_MANAGEMENT_REVIEW = "pending_management_review"
     APPROVED = "approved"   # final — added to the cycle
     DECLINED = "declined"   # final — excluded (eligibility_status becomes EXEMPTED)
+    PENDING_QUALITY_RECHECK = "pending_quality_recheck"      # legacy
+    PENDING_MANAGEMENT_REVIEW = "pending_management_review"  # legacy
     # Legacy value — no longer set by new code, kept only so pre-existing
     # rows from before this chain existed still deserialize/display fine.
     PENDING = "pending"

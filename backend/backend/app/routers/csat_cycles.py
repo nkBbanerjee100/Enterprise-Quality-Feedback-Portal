@@ -1081,8 +1081,10 @@ def decide_enrollment_exemption(
 ):
     """
     approve=True  -> confirms the exemption; final Declined/Exempted.
-    approve=False -> rejects the exemption; project is now routed to its own
-    Manager for review (or approved outright if it has no Manager in TMS).
+    approve=False -> rejects the exemption; project is now Approved
+    (eligible for this cycle) immediately — same list as every other
+    approved project, neither added nor removed automatically. No Manager
+    hand-off, no further review: this is Management's final call either way.
     """
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
     project = db.query(Project).filter(Project.id == enr.project_id).first()
@@ -1101,17 +1103,16 @@ def decide_enrollment_exemption(
         enr.eligibility_status = EligibilityStatus.EXEMPTED
         # Quality's original reason stands — remarks are supplementary context.
     else:
+        # Still worth resolving the PM for display purposes, but it no
+        # longer gates anything — the project goes Approved either way,
+        # Management's word is final.
         try:
             pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
         except Exception as e:
             print(f"[WARN] Could not resolve PM for enrollment {enr.id}: {e}")
         enr.exemption_reason = None
-        if pm_info:
-            enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGER_REVIEW
-            enr.manager_emp_id = pm_info["emp_id"]
-        else:
-            enr.addition_approval_status = AdditionApprovalStatus.APPROVED
-            enr.manager_emp_id = None
+        enr.addition_approval_status = AdditionApprovalStatus.APPROVED
+        enr.manager_emp_id = pm_info["emp_id"] if pm_info else None
 
     db.commit()
     db.refresh(enr)
@@ -1131,13 +1132,6 @@ def decide_enrollment_exemption(
             exemption_approved=payload.approve, decided_by_name=decided_by_name,
             actor_emp_id=current_user["emp_id"], remarks=payload.remarks,
         )
-        if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGER_REVIEW:
-            notify_manager_enrollment_needs_review(
-                local_db=db, manager_emp_id=enr.manager_emp_id, cycle_id=cycle_id,
-                project_name=project.project_name, project_id=project.id,
-                enrollment_id=enr.id, enrolled_by_name=decided_by_name,
-                actor_emp_id=current_user["emp_id"],
-            )
         db.commit()
     except Exception as e:
         print(f"[WARN] Failed to notify for exemption decision on enrollment {enr.id}: {e}")
