@@ -214,6 +214,37 @@ def notify_quality_role_enrollment_needs_recheck(
                 print(f"[WARN] Failed to email quality user {quality_user.get('emp_id')}: {e}")
     local_db.flush()
 
+def notify_quality_of_manager_project_submission(
+    *,
+    local_db: Session,
+    cycle_id: int,
+    manager_name: str,
+    added_count: int,
+    exempted_count: int,
+    actor_emp_id: str,
+) -> None:
+    """Send one Quality notification for a Manager's final project submission."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    total_count = added_count + exempted_count
+
+    title = "Project Manager submitted CSAT project selections"
+    message = (
+        f"{manager_name} submitted {total_count} project selection(s) for this CSAT cycle: "
+        f"{added_count} to add and {exempted_count} exemption request(s). "
+        "Open the cycle to review the complete list."
+    )
+
+    local_db.add(Notification(
+        recipient_role="QUALITY",
+        actor_emp_id=actor_emp_id,
+        type="MANAGER_CYCLE_PROJECT_SUBMISSION",
+        title=title,
+        message=message,
+        cycle_id=cycle_id,
+        link=link,
+    ))
+
+    local_db.flush()
 
 def notify_management_enrollment_exemption_request(
     *, local_db: Session, cycle_id: int, project_name: str, project_id: int,

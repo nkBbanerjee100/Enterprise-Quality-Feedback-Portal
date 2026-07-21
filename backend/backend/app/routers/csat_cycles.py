@@ -25,7 +25,7 @@ from app.services.cycle_notification_service import (
     notify_manager_enrollment_needs_review, notify_quality_enrollment_needs_recheck,
     notify_management_enrollment_exemption_request, notify_quality_of_enrollment_exemption_decision,
     notify_management_enrollment_final_review, notify_quality_role_enrollment_needs_recheck,
-    notify_manager_of_enrollment_final_decision,
+    notify_manager_of_enrollment_final_decision, notify_quality_of_manager_project_submission,
 )
 from app.services.audit_service import log_action, get_client_ip
 from app.schemas.audit import AuditActions
@@ -765,18 +765,31 @@ def enroll_projects(
                     actor_emp_id=current_user["emp_id"],
                 )
             elif outcome == "manager_self_exempt":
-                # No distinct Quality submitter to target — this Manager
-                # both added and exempted their own project — so broadcast
-                # to the whole QUALITY role instead of one specific person.
-                notify_quality_role_enrollment_needs_recheck(
-                    local_db=db, cycle_id=cycle_id, project_name=project.project_name,
-                    project_id=project.id, enrollment_id=enr.id,
-                    manager_name=enrolled_by_name, exemption_reason=enr.exemption_reason or "",
-                    actor_emp_id=current_user["emp_id"],
-                )
+                # Do not notify Quality per project here.
+                # A single final notification is sent after the entire manager batch succeeds.
+                continue
         except Exception as e:
             print(f"[WARN] Failed to send notifications for enrollment {enr.id}: {e}")
             warnings.append({"tms_project_id": int(project.project_id), "reason": "Saved, but the notification failed to send."})
+            
+    if is_manager_role and newly_enrolled:
+        added_count = sum(
+            1 for _, _, outcome in newly_enrolled
+            if outcome == "manager_self_add"
+        )
+        exempted_count = sum(
+            1 for _, _, outcome in newly_enrolled
+            if outcome == "manager_self_exempt"
+        )
+
+        notify_quality_of_manager_project_submission(
+            local_db=db,
+            cycle_id=cycle_id,
+            manager_name=enrolled_by_name,
+            added_count=added_count,
+            exempted_count=exempted_count,
+            actor_emp_id=current_user["emp_id"],
+        )
     db.commit()
 
     ip = get_client_ip(request)
