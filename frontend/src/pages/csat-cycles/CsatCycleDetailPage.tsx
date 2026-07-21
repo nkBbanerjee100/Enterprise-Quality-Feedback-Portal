@@ -29,6 +29,13 @@ const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 // its eligibility surfaced too).
 type RowStatus = 'review' | 'ready' | 'not-eligible';
 
+type PendingProjectSelection = {
+  tmsProjectId: number;
+  projectName: string;
+  action: 'eligible' | 'exempted';
+  exemptionReason?: string;
+};
+
 const _PENDING_ADDITION_STATUSES = new Set([
   'pending', // legacy
   'pending_management_exemption_review', 'pending_manager_review',
@@ -62,9 +69,9 @@ function getRowStatus(p: EnrolledProject): RowStatus {
 }
 
 const ROW_STATUS_META: Record<RowStatus, { label: string; bg: string; text: string; bar: string }> = {
-  review:       { label: 'Awaiting approval', bg: '#FDF6E3', text: '#9B7C2A', bar: '#F59E0B' },
-  ready:        { label: 'Ready',              bg: '#E8F2EC', text: '#1A5C3A', bar: '#059669' },
-  'not-eligible': { label: 'Not eligible',     bg: '#F3F4F6', text: '#6B7280', bar: '#D1D5DB' },
+  review: { label: 'Awaiting approval', bg: '#FDF6E3', text: '#9B7C2A', bar: '#F59E0B' },
+  ready: { label: 'Ready', bg: '#E8F2EC', text: '#1A5C3A', bar: '#059669' },
+  'not-eligible': { label: 'Not eligible', bg: '#F3F4F6', text: '#6B7280', bar: '#D1D5DB' },
 };
 
 // label defaults to the status's neutral copy, but callers can override it —
@@ -140,10 +147,9 @@ function RowMenu({ items }: { items: { label: string; onClick: () => void; disab
 // that's what caused this to show 0 completed projects before this fix.
 
 function EnrollModal({
-  cycleId, enrolledIds, onClose, onDone, onTriaged,
+  cycleId, enrolledIds, onClose, onDone,
 }: {
   cycleId: number; enrolledIds: Set<number>; onClose: () => void; onDone: () => void;
-  onTriaged: () => void;   // refresh the parent's enrolled set without closing the modal
 }) {
   const { user } = useAuthStore();
   // A Manager can only ever add their OWN projects (TMS PmId match) —
@@ -154,8 +160,9 @@ function EnrollModal({
   const [search, setSearch] = useState('');
   const [pmFilter, setPmFilter] = useState('');
   const [yearFilter, setYearFilter] = useState('');
-  const [busyId, setBusyId] = useState<number | null>(null);
-  const [tally, setTally] = useState({ eligible: 0, exempted: 0 });
+  const [selectedProjects, setSelectedProjects] = useState<PendingProjectSelection[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   // Keyed on cycleId only — NOT enrolledIds.size. enrolledIds.size changes
   // by +1 every time a project is triaged, and using it here meant React
@@ -181,8 +188,10 @@ function EnrollModal({
 
   const { activeProjects, completedProjects } = useMemo(() => {
     const projects = (data as any)?.projects ?? [];
+    const selectedProjectIds = new Set(selectedProjects.map(project => project.tmsProjectId));
     const available = projects.filter((p: any) =>
       !enrolledIds.has(p.project_id) &&
+      !selectedProjectIds.has(Number(p.project_id)) &&
       (search === '' || p.project_name.toLowerCase().includes(search.toLowerCase())) &&
       (isManagerRole || pmFilter === '' || p.project_manager_emp_id === pmFilter) &&
       (yearFilter === '' || (p.start_date && new Date(p.start_date).getFullYear() === Number(yearFilter)))
@@ -210,7 +219,7 @@ function EnrollModal({
     active.sort((a, b) => a.project_name.localeCompare(b.project_name));
     completed.sort((a, b) => a.project_name.localeCompare(b.project_name));
     return { activeProjects: active, completedProjects: completed };
-  }, [data, enrolledIds, search, pmFilter, yearFilter, isManagerRole, user?.emp_id]);
+  }, [data, enrolledIds, selectedProjects, search, pmFilter, yearFilter, isManagerRole, user?.emp_id]);
 
   const totalFiltered = activeProjects.length + completedProjects.length;
 
@@ -218,37 +227,61 @@ function EnrollModal({
   // (eligible -> the project's own Manager; exempted -> Management for an
   // exemption decision) based on the action/reason passed here. No more
   // manual enroll-then-approve-then-set-eligibility round trip needed.
-  const [lastAction, setLastAction] = useState<{ id: number; name: string; action: 'eligible' | 'exempted' } | null>(null);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [exemptConfirm, setExemptConfirm] = useState<ExemptConfirmRequest | null>(null);
 
-  const triage = async (tmsProjectId: number, projectName: string, action: 'eligible' | 'exempted', exemptionReason?: string) => {
-    setBusyId(tmsProjectId);
+  const selectProject = (
+    tmsProjectId: number,
+    projectName: string,
+    action: 'eligible' | 'exempted',
+    exemptionReason?: string,
+  ) => {
     setErrorMsg(null);
+
+    setSelectedProjects(previous => [
+      ...previous.filter(project => project.tmsProjectId !== tmsProjectId),
+      {
+        tmsProjectId,
+        projectName,
+        action,
+        exemptionReason,
+      },
+    ]);
+  };
+
+  const removeSelectedProject = (tmsProjectId: number) => {
+    setSelectedProjects(previous =>
+      previous.filter(project => project.tmsProjectId !== tmsProjectId),
+    );
+  };
+
+  const submitSelections = async () => {
+    if (selectedProjects.length === 0) {
+      setErrorMsg('Select at least one project before submitting.');
+      return;
+    }
+
+    setSubmitting(true);
+    setErrorMsg(null);
+
     try {
-      // Eligible for a Manager's own project is auto-approved server-side
-      // (see enroll_projects's is_manager_role branch) — no triage decision
-      // to make there. Exempt (Manager or not) always goes through `items`
-      // so the backend can route it into the chain (Manager exempt -> back
-      // with Quality to recheck).
       await csatCyclesApi.enrollProjects(cycleId, {
-        items: [{ tms_project_id: tmsProjectId, action, exemption_reason: exemptionReason }],
+        items: selectedProjects.map(project => ({
+          tms_project_id: project.tmsProjectId,
+          action: project.action,
+          exemption_reason: project.exemptionReason,
+        })),
       });
 
-      // Immediate feedback — don't wait on the refetch (which can lag a
-      // beat behind the click) to show that something actually happened.
-      setTally(prev => ({ ...prev, [action]: prev[action] + 1 }));
-      setLastAction({ id: tmsProjectId, name: projectName, action });
-      onTriaged(); // refreshes enrolledIds — row disappears from this list once that resolves
+      onDone();
     } catch (err) {
-      // This previously had no catch at all — the promise rejection just
-      // vanished silently, leaving the row looking untouched with no
-      // indication anything had gone wrong.
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setErrorMsg(detail || `Couldn't update "${projectName}". Please try again.`);
+      const detail = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail;
+
+      setErrorMsg(detail || 'Could not submit the selected projects. Please try again.');
     } finally {
-      setBusyId(null);
+      setSubmitting(false);
     }
   };
 
@@ -298,32 +331,64 @@ function EnrollModal({
             )}
           </div>
 
-          {/* Live tally — updates the instant an action succeeds, not just
-              after "Done" is clicked. Also confirms the most recent action
-              by name, since a busy network tick can make the row's own
-              disappearance feel disconnected from the click that caused it. */}
-          <div className="flex items-center justify-between mt-3 mb-1 flex-wrap gap-y-1">
-            <div className="flex items-center gap-3 text-xs font-semibold">
-              <span className={tally.eligible > 0 ? 'text-green-700' : 'text-gray-300'}>✓ {tally.eligible} Eligible</span>
-              <span className={tally.exempted > 0 ? 'text-gray-600' : 'text-gray-300'}>✕ {tally.exempted} Exempt</span>
-            </div>
-            {lastAction && (
-              <span className="text-xs text-gray-400 truncate max-w-[220px]">
-                Last: <span className="font-medium text-gray-600">{lastAction.name}</span> → {
-                  lastAction.action === 'eligible'
-                    ? (isManagerRole ? 'Added' : "Sent to the project's Manager")
-                    : (isManagerRole ? 'Sent to Quality to recheck' : 'Sent to Management for exemption review')
-                }
-              </span>
-            )}
+          <div className="flex items-center gap-3 mt-3 mb-1 text-xs font-semibold">
+            <span className={selectedProjects.filter(project => project.action === 'eligible').length > 0 ? 'text-green-700' : 'text-gray-300'}>
+              ✓ {selectedProjects.filter(project => project.action === 'eligible').length} To Add
+            </span>
+
+            <span className={selectedProjects.filter(project => project.action === 'exempted').length > 0 ? 'text-gray-600' : 'text-gray-300'}>
+              ✕ {selectedProjects.filter(project => project.action === 'exempted').length} To Exempt
+            </span>
+          </div>
+        </div>
+
+        {errorMsg && (
+          <div className="mb-2 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg">
+            {errorMsg}
+          </div>
+        )}
+        {false && selectedProjects.length > 0 && (
+          <div className="mx-5 mb-3 border border-green-200 rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-green-50 flex items-center justify-between">
+              <span className="text-xs font-bold text-green-800">
+              Selected Projects ({selectedProjects.length})
+            </span>
+            <span className="text-xs text-green-700">
+              Review before submitting to Quality
+            </span>
           </div>
 
-          {errorMsg && (
-            <div className="mb-2 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg">
-              {errorMsg}
+            <div className="max-h-40 overflow-y-auto divide-y divide-gray-100">
+              {selectedProjects.map(project => (
+                <div
+                  key={project.tmsProjectId}
+                  className="px-3 py-2 flex items-start gap-3 text-xs"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-800 truncate">
+                      {project.projectName}
+                    </p>
+
+                    <p className="text-gray-500 mt-0.5">
+                      {project.action === 'eligible' ? 'Add to cycle' : 'Exempt from cycle'}
+                      {project.exemptionReason && ` — ${project.exemptionReason}`}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeSelectedProject(project.tmsProjectId)}
+                    disabled={submitting}
+                    className="text-red-600 hover:text-red-800 font-medium"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-1 mt-1">
           {isLoading ? (
@@ -354,26 +419,25 @@ function EnrollModal({
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <button
-                          disabled={busyId === p.project_id}
-                          onClick={() => triage(p.project_id, p.project_name, 'eligible')}
+                          disabled={submitting}
+                          onClick={() => selectProject(p.project_id, p.project_name, 'eligible')}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
                         >
-                          {isManagerRole ? '+ Add to Cycle' : '✓ Eligible'}
+                          {isManagerRole ? '+ Select to Add' : '✓ Eligible'}
                         </button>
                         <button
-                          disabled={busyId === p.project_id}
+                          disabled={submitting}
                           onClick={() => setExemptConfirm({
                             projectName: p.project_name,
-                            message: isManagerRole
-                              ? 'This sends the project to Quality to recheck before anything is finalized.'
-                              : 'This sends the project to Management to approve or reject the exemption.',
+                            message: 'The exemption will be included in your final submission to Quality.',
                             requireReason: true,
-                            confirmLabel: 'Exempt',
-                            onConfirm: (reason) => triage(p.project_id, p.project_name, 'exempted', reason),
+                            confirmLabel: 'Select Exemption',
+                            onConfirm: (reason: string) =>
+                              selectProject(p.project_id, p.project_name, 'exempted', reason),
                           })}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
                         >
-                          ✕ Exempt
+                          ✕ Select Exemption
                         </button>
                       </div>
                     </div>
@@ -412,26 +476,25 @@ function EnrollModal({
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <button
-                          disabled={busyId === p.project_id}
-                          onClick={() => triage(p.project_id, p.project_name, 'eligible')}
+                          disabled={submitting}
+                          onClick={() => selectProject(p.project_id, p.project_name, 'eligible')}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
                         >
-                          {isManagerRole ? '+ Add to Cycle' : '✓ Eligible'}
+                          {isManagerRole ? '+ Select to Add' : '✓ Eligible'}
                         </button>
                         <button
-                          disabled={busyId === p.project_id}
+                          disabled={submitting}
                           onClick={() => setExemptConfirm({
                             projectName: p.project_name,
-                            message: isManagerRole
-                              ? 'This sends the project to Quality to recheck before anything is finalized.'
-                              : 'This sends the project to Management to approve or reject the exemption.',
+                            message: 'The exemption will be included in your final submission to Quality.',
                             requireReason: true,
-                            confirmLabel: 'Exempt',
-                            onConfirm: (reason) => triage(p.project_id, p.project_name, 'exempted', reason),
+                            confirmLabel: 'Select Exemption',
+                            onConfirm: (reason: string) =>
+                              selectProject(p.project_id, p.project_name, 'exempted', reason),
                           })}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
                         >
-                          ✕ Exempt
+                          ✕ Select Exemption
                         </button>
                       </div>
                     </div>
@@ -443,31 +506,128 @@ function EnrollModal({
         </div>
 
         <div className="px-5 py-4 flex justify-between items-center border-t border-gray-100 flex-shrink-0">
-          <span className="text-xs text-gray-400">
-            {tally.eligible + tally.exempted > 0
-              ? 'All changes above are already saved.'
-              : 'Each button takes effect immediately — nothing to submit.'}
+          <span className="text-xs text-gray-500">
+            {selectedProjects.length > 0
+              ? `${selectedProjects.length} project(s) selected.`
+              : 'Select projects to add or exempt, then verify them.'}
           </span>
-          <button
-            onClick={onDone}
-            style={{ background: BRAND.green }}
-            className="px-5 py-2 text-sm text-white font-semibold rounded-lg hover:opacity-90"
-          >
-            Close
-          </button>
+
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              disabled={submitting}
+              className="px-4 py-2 text-sm text-gray-600 font-semibold rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+
+            <button
+            onClick={() => setReviewOpen(true)}
+              disabled={submitting || selectedProjects.length === 0}
+              style={{ background: BRAND.green }}
+              className="px-5 py-2 text-sm text-white font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
+            >
+            Verify & Continue
+            </button>
+          </div>
         </div>
       </div>
 
-      {exemptConfirm && (
-        <ExemptConfirmModal
-          projectName={exemptConfirm.projectName}
-          message={exemptConfirm.message}
-          requireReason={exemptConfirm.requireReason}
-          confirmLabel={exemptConfirm.confirmLabel}
-          onCancel={() => setExemptConfirm(null)}
-          onConfirm={(reason) => { const cb = exemptConfirm.onConfirm; setExemptConfirm(null); cb(reason); }}
+      {
+        exemptConfirm && (
+          <ExemptConfirmModal
+            projectName={exemptConfirm.projectName}
+            message={exemptConfirm.message}
+            requireReason={exemptConfirm.requireReason}
+            confirmLabel={exemptConfirm.confirmLabel}
+            onCancel={() => setExemptConfirm(null)}
+            onConfirm={(reason) => { const cb = exemptConfirm.onConfirm; setExemptConfirm(null); cb(reason); }}
+          />
+        )
+      }
+      {reviewOpen && (
+        <ProjectSelectionReviewModal
+          projects={selectedProjects}
+          submitting={submitting}
+          errorMessage={errorMsg}
+          onBack={() => setReviewOpen(false)}
+          onRemove={removeSelectedProject}
+          onSubmit={submitSelections}
         />
       )}
+    </div >
+  );
+}
+
+function ProjectSelectionReviewModal({
+  projects, submitting, errorMessage, onBack, onRemove, onSubmit,
+}: {
+  projects: PendingProjectSelection[];
+  submitting: boolean;
+  errorMessage: string | null;
+  onBack: () => void;
+  onRemove: (tmsProjectId: number) => void;
+  onSubmit: () => void;
+}) {
+  const eligibleCount = projects.filter(project => project.action === 'eligible').length;
+  const exemptedCount = projects.length - eligibleCount;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+        <div style={{ background: BRAND.green }} className="px-6 py-4 flex justify-between items-center flex-shrink-0">
+          <div>
+            <p className="text-green-100 text-xs font-semibold uppercase tracking-wide">Step 2 of 2</p>
+            <h2 className="text-white font-bold text-lg mt-1">Verify Project Selections</h2>
+          </div>
+          <button onClick={onBack} disabled={submitting} className="text-white/70 hover:text-white text-xl disabled:opacity-50">x</button>
+        </div>
+
+        <div className="px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <p className="text-sm text-gray-600">Review all selected projects before sending them to Quality.</p>
+          <div className="flex gap-3 mt-3 text-xs font-semibold">
+            <span className="text-green-700">{eligibleCount} to add</span>
+            <span className="text-gray-600">{exemptedCount} to exempt</span>
+          </div>
+          {errorMessage && <p className="mt-3 text-sm text-red-700">{errorMessage}</p>}
+        </div>
+
+        <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+          {projects.map(project => (
+            <div key={project.tmsProjectId} className="px-6 py-4 flex items-start gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 break-words">{project.projectName}</p>
+                <p className={`mt-1 text-sm font-medium ${project.action === 'eligible' ? 'text-green-700' : 'text-gray-600'}`}>
+                  {project.action === 'eligible' ? 'Add to cycle' : 'Exempt from cycle'}
+                </p>
+                {project.exemptionReason && <p className="mt-1 text-sm text-gray-500 break-words">Reason: {project.exemptionReason}</p>}
+              </div>
+              <button
+                type="button"
+                onClick={() => onRemove(project.tmsProjectId)}
+                disabled={submitting}
+                className="px-3 py-1.5 text-sm font-semibold text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center flex-shrink-0">
+          <button onClick={onBack} disabled={submitting} className="px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+            Back to Selection
+          </button>
+          <button
+            onClick={onSubmit}
+            disabled={submitting || projects.length === 0}
+            style={{ background: BRAND.green }}
+            className="px-5 py-2 text-sm text-white font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
+          >
+            {submitting ? 'Submitting...' : 'Submit to Quality'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -482,10 +642,12 @@ function ManagerDecisionModal({
   const [remarks, setRemarks] = useState('');
 
   const mutation = useMutation({
-    mutationFn: () => csatCyclesApi.managerDecision(cycleId, project.enrollment_id, {
-      decision: decision!,
-      manager_remarks: remarks,
-    }),
+    mutationFn: () => csatCyclesApi.managerDecide(
+      cycleId,
+      project.enrollment_id,
+      decision === 'approved' ? 'eligible' : 'exempted',
+      remarks,
+    ),
     onSuccess: onDone,
   });
 
@@ -514,21 +676,19 @@ function ManagerDecisionModal({
           <div className="flex gap-3">
             <button
               onClick={() => setDecision('approved')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
-                decision === 'approved'
-                  ? 'border-green-500 bg-green-50 text-green-800'
-                  : 'border-gray-200 text-gray-600 hover:border-green-300'
-              }`}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'approved'
+                ? 'border-green-500 bg-green-50 text-green-800'
+                : 'border-gray-200 text-gray-600 hover:border-green-300'
+                }`}
             >
               ✓ Approve
             </button>
             <button
               onClick={() => setDecision('declined')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
-                decision === 'declined'
-                  ? 'border-red-400 bg-red-50 text-red-800'
-                  : 'border-gray-200 text-gray-600 hover:border-red-300'
-              }`}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'declined'
+                ? 'border-red-400 bg-red-50 text-red-800'
+                : 'border-gray-200 text-gray-600 hover:border-red-300'
+                }`}
             >
               ✕ Decline
             </button>
@@ -604,21 +764,19 @@ function AdditionDecisionModal({
           <div className="flex gap-3">
             <button
               onClick={() => setDecision('approved')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
-                decision === 'approved'
-                  ? 'border-green-500 bg-green-50 text-green-800'
-                  : 'border-gray-200 text-gray-600 hover:border-green-300'
-              }`}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'approved'
+                ? 'border-green-500 bg-green-50 text-green-800'
+                : 'border-gray-200 text-gray-600 hover:border-green-300'
+                }`}
             >
               ✓ Approve
             </button>
             <button
               onClick={() => setDecision('declined')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${
-                decision === 'declined'
-                  ? 'border-red-400 bg-red-50 text-red-800'
-                  : 'border-gray-200 text-gray-600 hover:border-red-300'
-              }`}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'declined'
+                ? 'border-red-400 bg-red-50 text-red-800'
+                : 'border-gray-200 text-gray-600 hover:border-red-300'
+                }`}
             >
               ✕ Decline
             </button>
@@ -905,11 +1063,10 @@ export const CsatCycleDetailPage: React.FC = () => {
                 >
                   {(cycle as any)?.year} · {halfLabel(cycle)}
                 </span>
-                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                  ((cycle as any)?.is_active ?? (cycle as any)?.isActive)
-                    ? 'bg-green-100 text-green-800'
-                    : 'bg-gray-100 text-gray-500'
-                }`}>
+                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${((cycle as any)?.is_active ?? (cycle as any)?.isActive)
+                  ? 'bg-green-100 text-green-800'
+                  : 'bg-gray-100 text-gray-500'
+                  }`}>
                   {((cycle as any)?.is_active ?? (cycle as any)?.isActive) ? 'Active' : 'Inactive'}
                 </span>
               </div>
@@ -925,10 +1082,10 @@ export const CsatCycleDetailPage: React.FC = () => {
             {/* KPI row — click a stat to jump to that filter */}
             <div className="flex gap-3 flex-wrap">
               {([
-                { label: 'Total',              value: kpiTotal,                     color: '#6B7280', filter: 'all' as const },
-                { label: 'Needs review',        value: statusCounts.review,          color: '#9B7C2A', filter: 'review' as const },
-                { label: 'Ready',               value: statusCounts.ready,           color: '#059669', filter: 'ready' as const },
-                { label: 'Not eligible',        value: statusCounts['not-eligible'], color: '#6B7280', filter: 'not-eligible' as const },
+                { label: 'Total', value: kpiTotal, color: '#6B7280', filter: 'all' as const },
+                { label: 'Needs review', value: statusCounts.review, color: '#9B7C2A', filter: 'review' as const },
+                { label: 'Ready', value: statusCounts.ready, color: '#059669', filter: 'ready' as const },
+                { label: 'Not eligible', value: statusCounts['not-eligible'], color: '#6B7280', filter: 'not-eligible' as const },
               ]).map(kpi => (
                 <button
                   key={kpi.label}
@@ -987,11 +1144,10 @@ export const CsatCycleDetailPage: React.FC = () => {
             <button
               key={tab.filter}
               onClick={() => setStatusFilter(tab.filter)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-                statusFilter === tab.filter
-                  ? 'bg-gray-800 text-white border-transparent'
-                  : 'text-gray-600 border-gray-200 hover:border-gray-400 bg-white'
-              }`}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${statusFilter === tab.filter
+                ? 'bg-gray-800 text-white border-transparent'
+                : 'text-gray-600 border-gray-200 hover:border-gray-400 bg-white'
+                }`}
             >
               {tab.label}
             </button>
@@ -1212,7 +1368,6 @@ export const CsatCycleDetailPage: React.FC = () => {
           enrolledIds={enrolledTmsIds}
           onClose={() => setEnrollModal(false)}
           onDone={() => { setEnrollModal(false); invalidate(); }}
-          onTriaged={invalidate}
         />
       )}
       {approvalTarget && (
