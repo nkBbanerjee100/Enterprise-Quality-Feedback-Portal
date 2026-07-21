@@ -137,10 +137,10 @@ function ReviewRow({
                 opacity: busy ? 0.5 : 1, whiteSpace: 'nowrap',
               }}
             >
-              {item.action_type === 'exemption' ? 'Reject Exemption' : 'Approve'}
+              Reject Exemption
             </button>
             <span style={{ fontSize: 10, color: BRAND.textLight, textAlign: 'center', lineHeight: 1.3, maxWidth: 110 }}>
-              {item.action_type === 'exemption' ? 'final · makes it eligible' : 'final · adds to cycle'}
+              final · makes it eligible
             </span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
@@ -153,7 +153,7 @@ function ReviewRow({
                 opacity: busy ? 0.5 : 1, whiteSpace: 'nowrap',
               }}
             >
-              {item.action_type === 'exemption' ? 'Approve Exemption' : 'Decline'}
+              Approve Exemption
             </button>
             <span style={{ fontSize: 10, color: BRAND.textLight, textAlign: 'center', lineHeight: 1.3, maxWidth: 110 }}>
               {item.action_type === 'exemption' ? 'final · removes from cycle' : 'final · removes from cycle · reason required'}
@@ -187,7 +187,7 @@ function ReviewRow({
               opacity: (busy || !remarks.trim()) ? 0.5 : 1,
             }}
           >
-            Confirm Decline
+            Confirm Exemption
           </button>
         </div>
       )}

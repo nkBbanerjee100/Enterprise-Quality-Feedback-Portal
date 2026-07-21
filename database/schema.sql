@@ -6,14 +6,14 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS `csat_allowed_users`;
 CREATE TABLE `csat_allowed_users` (
   `Email` varchar(100) NOT NULL,
-  `role` enum('QUALITY','DELIVERY','SALES','CUSTOMER','MANAGER') NOT NULL,
+  `role` enum('QUALITY','DELIVERY','SALES','CUSTOMER','MANAGER','MANAGEMENT') NOT NULL,
   `allowed_by` varchar(100) DEFAULT NULL,
   `is_used` tinyint(1) NOT NULL DEFAULT '0',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `used_at` datetime DEFAULT NULL,
-  PRIMARY KEY (`Email`)
+  PRIMARY KEY (`Email`),
+  KEY `ix_csat_allowed_users_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
 -- ------------------------------------------------------------
 -- csat_users
 -- ------------------------------------------------------------
