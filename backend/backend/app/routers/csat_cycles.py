@@ -1,4 +1,5 @@
 """CSAT Cycle routes — full implementation"""
+import json
 from datetime import datetime, date
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
@@ -10,6 +11,8 @@ from app.core.dependencies import get_current_user, require_role
 from app.models.csat_cycle import CSATCycle
 from app.models.project import Project
 from app.models.feedback_request import FeedbackRequest
+from app.models.project_staging import ProjectStaging
+from app.models.audit_log import AuditLog
 from app.models.cycle_project_enrollment import (
     CycleProjectEnrollment, EligibilityStatus, AdditionApprovalStatus,
 )
@@ -810,7 +813,7 @@ def enroll_projects(
             actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
             actor_role=current_user["role"], ip_address=ip,
             entity_type="cycle_project_enrollment", entity_id=enr.id,
-            details={"cycle_id": cycle_id, "project_name": project.project_name, "outcome": outcome},
+            details={"cycle_id": cycle_id, "project_name": project.project_name, "outcome": outcome, "remarks": enr.exemption_reason},
         )
 
     return {"enrolled": enrolled, "skipped": skipped, "warnings": warnings}
@@ -945,7 +948,7 @@ def approve_addition(
         actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks, "via": "enrollment_review"},
     )
 
     try:
@@ -987,8 +990,6 @@ def decline_addition(
         raise HTTPException(status_code=400, detail="A reason is required to reject the exemption.")
 
     enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGER_REVIEW
-    enr.addition_approved_by = current_user["emp_id"]
-    enr.addition_approved_at = datetime.utcnow()
     enr.addition_decision_remarks = payload.remarks
     enr.exemption_reason = None
 
@@ -1000,7 +1001,7 @@ def decline_addition(
         actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks, "via": "enrollment_review"},
     )
 
     try:
@@ -1065,7 +1066,7 @@ def manager_decide_enrollment(
         actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "manager_decide"},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "manager_decide", "remarks": payload.exemption_reason},
     )
 
     try:
@@ -1129,7 +1130,7 @@ def quality_recheck_enrollment(
         actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "quality_recheck"},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "quality_recheck", "remarks": payload.exemption_reason},
     )
 
     try:
@@ -1182,6 +1183,8 @@ def decide_enrollment_exemption(
 
     if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW:
         raise HTTPException(status_code=400, detail="This project isn't awaiting an exemption decision.")
+    if not (payload.remarks or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required, whether approving or rejecting the exemption.")
 
     decided_by_name = current_user.get("name") or current_user["emp_id"]
     enr.addition_approved_by = current_user["emp_id"]
@@ -1238,3 +1241,179 @@ def decide_enrollment_exemption(
         print(f"[WARN] Failed to notify for exemption decision on enrollment {enr.id}: {e}")
 
     return _enrollment_to_response(enr, project, pm_info, current_user)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /{cycle_id}/audit-report — every project in this cycle (added AND
+# exempted), each with its final outcome and a full chronological reason
+# trail: every decision made on it, by whom, and why — sourced from
+# audit_logs (already being written at every step in this chain, in both
+# this file and project_staging.py) rather than a new table. Solves the
+# "we can see it's exempted but not why, or who decided what along the
+# way" gap — the individual reason fields on the enrollment/staging rows
+# only ever hold the LATEST value at each stage, since a project can pass
+# through Manager -> QM -> Management more than once and each new decision
+# overwrites the last. audit_logs already has every one of those as its
+# own row, so this just assembles them per project instead of storing
+# anything new.
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/{cycle_id}/audit-report")
+def get_cycle_audit_report(
+    cycle_id: int,
+    outcome: Optional[str] = Query(None, description="Filter to 'added' or 'exempted' only"),
+    db: Session = Depends(get_local_db),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT", "MANAGER")),
+):
+    cycle = _get_cycle_or_404(cycle_id, db)
+
+    rows = (
+        db.query(CycleProjectEnrollment, Project)
+        .join(Project, Project.id == CycleProjectEnrollment.project_id)
+        .filter(CycleProjectEnrollment.cycle_id == cycle_id)
+        .all()
+    )
+    if not rows:
+        return {"cycle_id": cycle_id, "cycle_name": cycle.cycle_name, "total": 0, "added": 0, "exempted": 0, "projects": []}
+
+    # The staging row this enrollment was carried forward from, if any —
+    # some enrollments are added directly to an existing cycle later and
+    # never had one. Matched by project_id + converted_cycle_id since
+    # there's no direct FK either way between the two tables.
+    project_ids = [proj.id for _, proj in rows]
+    staging_by_project = {
+        s.project_id: s
+        for s in db.query(ProjectStaging).filter(
+            ProjectStaging.project_id.in_(project_ids),
+            ProjectStaging.converted_cycle_id == cycle_id,
+        ).all()
+    }
+
+    # One batched audit_logs query covering every enrollment AND every
+    # matched staging row, instead of two queries per project.
+    enrollment_ids = [str(enr.id) for enr, _ in rows]
+    staging_ids = [str(s.id) for s in staging_by_project.values()]
+    entity_filter = (
+        (AuditLog.entity_type == "cycle_project_enrollment") & (AuditLog.entity_id.in_(enrollment_ids))
+    )
+    if staging_ids:
+        entity_filter = entity_filter | (
+            (AuditLog.entity_type == "project_staging") & (AuditLog.entity_id.in_(staging_ids))
+        )
+    log_rows = db.query(AuditLog).filter(
+        AuditLog.success == True,  # noqa: E712
+        entity_filter,
+    ).order_by(AuditLog.created_at.asc()).all()
+
+    logs_by_enrollment: dict[str, list[AuditLog]] = {}
+    logs_by_staging: dict[str, list[AuditLog]] = {}
+    for log in log_rows:
+        if log.entity_type == "cycle_project_enrollment":
+            logs_by_enrollment.setdefault(log.entity_id, []).append(log)
+        elif log.entity_type == "project_staging":
+            logs_by_staging.setdefault(log.entity_id, []).append(log)
+
+    def _parse_details(raw: Optional[str]) -> dict:
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+
+    def _decision_label(action: str, details: dict) -> str:
+        """Translates the raw AuditActions constant + internal 'via'/
+        'decision' tags into a plain sentence fragment for display —
+        auditors shouldn't have to know what PROJECT_STAGING_TRIAGED or
+        pending_quality_recheck mean. Every decision point in this chain
+        logs one of a small number of shapes; this just names each one.
+        """
+        via = details.get("via")
+        decision = details.get("decision")  # only ever present on PROJECT_STAGING_TRIAGED entries
+
+        if action == "PROJECT_STAGING_TRIAGED":
+            if via in ("manager_self_select", "manager_decide"):
+                return "Marked Eligible" if decision == "eligible" else "Marked Exempt"
+            if via == "quality_recheck":
+                return "Approved Exemption" if decision == "pending_management_review" else "Rejected Exemption"
+            # via is empty on Quality's very first pick (POST /select)
+            return "Marked Eligible" if decision == "eligible" else "Requested Exemption"
+
+        if action in ("CYCLE_ADDITION_APPROVED", "CYCLE_ADDITION_DECLINED"):
+            approved = action == "CYCLE_ADDITION_APPROVED"
+            if via == "manager_decide":
+                return "Marked Eligible" if approved else "Marked Exempt"
+            if via == "quality_recheck":
+                # QM's "Reject Exemption" reaffirms eligible -> logged as
+                # APPROVED here; "Approve Exemption" -> logged as DECLINED.
+                return "Rejected Exemption" if approved else "Approved Exemption"
+            if via in ("exemption_decision", "staging_review", "enrollment_review"):
+                return "Approved Exemption" if approved else "Rejected Exemption"
+            return "Approved" if approved else "Declined"
+
+        if action == "PROJECT_ENROLLED":
+            outcome = details.get("outcome")
+            if outcome == "manager_self_exempt":
+                return "Marked Exempt"
+            if outcome == "exemption_requested":
+                return "Requested Exemption"
+            return "Added to Cycle"
+        if action == "CSAT_CYCLE_CREATED":
+            return "Cycle Created"
+        if action == "CYCLE_ELIGIBILITY_CHANGED":
+            return "Eligibility Changed"
+
+        return action.replace("_", " ").title()
+
+    def _timeline_entry(log: AuditLog) -> dict:
+        details = _parse_details(log.details)
+        # Only ever a real typed-in reason — never the raw status code that
+        # 'decision' holds, which isn't a reason and shouldn't display as one.
+        # Different call sites stash this under different keys ("remarks",
+        # "exemption_reason", or plain "reason" — e.g. CYCLE_ELIGIBILITY_CHANGED),
+        # so check all three.
+        reason = details.get("remarks") or details.get("exemption_reason") or details.get("reason")
+        return {
+            "at": log.created_at,
+            "actor_name": log.actor_name or log.actor_emp_id,
+            "actor_role": log.actor_role,
+            "action": _decision_label(log.action, details),
+            "reason": reason,
+        }
+
+    projects_out = []
+    added_count = 0
+    exempted_count = 0
+
+    for enr, proj in rows:
+        is_exempted = enr.eligibility_status == EligibilityStatus.EXEMPTED
+        if is_exempted:
+            exempted_count += 1
+        else:
+            added_count += 1
+
+        staging = staging_by_project.get(proj.id)
+        timeline = []
+        if staging:
+            timeline.extend(_timeline_entry(l) for l in logs_by_staging.get(str(staging.id), []))
+        timeline.extend(_timeline_entry(l) for l in logs_by_enrollment.get(str(enr.id), []))
+        timeline.sort(key=lambda t: t["at"])
+
+        projects_out.append({
+            "project_id": proj.id,
+            "project_name": proj.project_name,
+            "final_status": "exempted" if is_exempted else "added",
+            "current_reason": enr.exemption_reason,
+            "timeline": timeline,
+        })
+
+    if outcome in ("added", "exempted"):
+        projects_out = [p for p in projects_out if p["final_status"] == outcome]
+
+    return {
+        "cycle_id": cycle_id,
+        "cycle_name": cycle.cycle_name,
+        "total": len(rows),
+        "added": added_count,
+        "exempted": exempted_count,
+        "projects": projects_out,
+    }
