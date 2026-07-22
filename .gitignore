@@ -9,7 +9,7 @@ __pycache__/
 
 # virtual env
 venv/
-mvenv/
+myenv/
 env/
 
 # frontend ignore
@@ -29,7 +29,7 @@ __pycache__/
 
 # virtual env
 venv/
-mvenv/
+myenv/
 env/
 backend/backend/.venv/
 
