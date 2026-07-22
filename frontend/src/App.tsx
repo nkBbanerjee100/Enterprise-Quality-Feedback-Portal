@@ -5,7 +5,7 @@
  *   Quality_Admin           → /admin   (future phase)
  *   Quality_User            → /dashboard
  *   Management_User         → /reports
- *   Customer                → /survey/:token  (public, no auth)
+ *   Customer                → /survey        (public, no auth)
  *   System_Integration_User → /dashboard
  *
  * Per doc §5.1:
@@ -85,7 +85,7 @@ function App() {
 
 
 <Route
-  path="/survey/:token"
+  path="/survey"
   element={<CustomerSurveyPage />}
 />
             <Route path="/login"           element={<LoginPage />} />
@@ -93,7 +93,7 @@ function App() {
             {/* //<Route path="/activate"        element={<ActivateAccountPage />} /> */}
             <Route path="/register-self"   element={<SelfRegisterPage />} />
             <Route path="/unauthorized"    element={<UnauthorizedPage />} />
-            <Route path="/survey/:token"   element={<CustomerSurveyPage />} />
+            <Route path="/survey"   element={<CustomerSurveyPage />} />
 
             {/* Register — public. Anyone can land here, but the backend only
                 lets the registration succeed for emails already allow-listed
