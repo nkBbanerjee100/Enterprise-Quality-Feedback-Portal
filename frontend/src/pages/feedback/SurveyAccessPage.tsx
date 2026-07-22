@@ -161,17 +161,16 @@ export const SurveyAccessPage = () => {
         )}
 
         <button
-          className="w-full rounded-lg bg-green-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-70"
-          onClick={phase === 'otp' ? handleVerifyOtp : handleSendOtp}
-          disabled={
-            (phase === 'otp' && (!canVerifyOtp || verifying)) ||
-            (phase === 'email' && (!canRequestOtp || sending)) ||
-            cooldownSeconds > 0
-          }
-        >
-          {phase === 'otp'
-            ? (verifying ? STATUS_TEXT.verifying : STATUS_TEXT.verify)
-            : (sending ? STATUS_TEXT.sending : sendButtonLabel)}
+  className="w-full rounded-lg bg-green-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-70"
+  onClick={phase === 'otp' ? handleVerifyOtp : handleSendOtp}
+  disabled={
+    (phase === 'otp' && (!canVerifyOtp || verifying)) ||
+    (phase === 'email' && (!canRequestOtp || sending))
+  }
+>
+  {phase === 'otp'
+    ? (verifying ? STATUS_TEXT.verifying : STATUS_TEXT.verify)
+    : (sending ? STATUS_TEXT.sending : sendButtonLabel)}
         </button>
 
         {phase === 'otp' && (
