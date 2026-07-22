@@ -23,6 +23,7 @@ import json
 import time
 import string
 import secrets
+import re
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status, Depends, Query
@@ -69,6 +70,8 @@ class EditDraftPayload(BaseModel):
 
 class PMApprovePayload(BaseModel):
     pmAchievements: str
+    recipientName: Optional[str] = None
+    recipientEmail: Optional[str] = None
 
 
 class PMRejectPayload(BaseModel):
@@ -548,13 +551,24 @@ def pm_approve(
     if row.pm_approval_status != "pending_pm":
         raise HTTPException(status_code=400, detail="Only requests awaiting PM review can be approved.")
 
+    # The PM is often the one who actually knows the right customer contact
+    # — Quality may have the wrong name or a stale email when they first
+    # drafted this. Both optional: only touched if the PM actually changed
+    # something, so old callers (and old frontend builds) still work
+    # unchanged with just pmAchievements.
+    recipient_name = (payload.recipientName or "").strip() or row.recipient_name
+    recipient_email = (payload.recipientEmail or "").strip() or row.recipient_email
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", recipient_email):
+        raise HTTPException(status_code=400, detail="That doesn't look like a valid email address.")
+
     db.execute(
         text("""
             UPDATE fact_feedback_request
-            SET pm_approval_status = 'approved', pm_achievements = :achievements, pm_rejection_comments = NULL
+            SET pm_approval_status = 'approved', pm_achievements = :achievements, pm_rejection_comments = NULL,
+                recipient_name = :recipient_name, recipient_email = :recipient_email
             WHERE id = :id
         """),
-        {"achievements": payload.pmAchievements, "id": request_id},
+        {"achievements": payload.pmAchievements, "id": request_id, "recipient_name": recipient_name, "recipient_email": recipient_email},
     )
     db.commit()
 
@@ -566,7 +580,7 @@ def pm_approve(
         actor_emp_id=current_user.get("emp_id"),
         notif_type="FEEDBACK_PM_APPROVED",
         title="A feedback form was approved by the PM",
-        message=f'{pm_name} approved the CSAT feedback draft for "{project_name}" ({row.recipient_name}) — ready to send.',
+        message=f'{pm_name} approved the CSAT feedback draft for "{project_name}" ({recipient_name}) — ready to send.',
         link=f"{settings.FRONTEND_URL}/feedback",
     )
 

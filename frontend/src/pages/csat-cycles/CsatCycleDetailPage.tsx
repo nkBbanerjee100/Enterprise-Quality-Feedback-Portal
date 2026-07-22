@@ -312,14 +312,43 @@ function EnrollModal({
             )}
           </div>
 
-          <div className="flex items-center gap-3 mt-3 mb-1 text-xs font-semibold">
-            <span className={selectedProjects.filter(project => project.action === 'eligible').length > 0 ? 'text-green-700' : 'text-gray-300'}>
-              ✓ {selectedProjects.filter(project => project.action === 'eligible').length} To Add
-            </span>
+          <div className="mt-3 mb-1">
+            <div className="flex items-center gap-3 text-xs font-semibold">
+              <span className={selectedProjects.filter(project => project.action === 'eligible').length > 0 ? 'text-green-700' : 'text-gray-300'}>
+                ✓ {selectedProjects.filter(project => project.action === 'eligible').length} To Add
+              </span>
 
-            <span className={selectedProjects.filter(project => project.action === 'exempted').length > 0 ? 'text-gray-600' : 'text-gray-300'}>
-              ✕ {selectedProjects.filter(project => project.action === 'exempted').length} To Exempt
-            </span>
+              <span className={selectedProjects.filter(project => project.action === 'exempted').length > 0 ? 'text-orange-600' : 'text-gray-300'}>
+                ✕ {selectedProjects.filter(project => project.action === 'exempted').length} To Exempt
+              </span>
+            </div>
+
+            {selectedProjects.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {selectedProjects.map(project => (
+                  <span
+                    key={project.tmsProjectId}
+                    className={`inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium border ${
+                      project.action === 'eligible'
+                        ? 'bg-green-50 text-green-700 border-green-200'
+                        : 'bg-orange-50 text-orange-700 border-orange-200'
+                    }`}
+                    title={project.action === 'exempted' && project.exemptionReason ? `Reason: ${project.exemptionReason}` : undefined}
+                  >
+                    {project.action === 'eligible' ? '✓' : '✕'} {project.projectName}
+                    <button
+                      onClick={() => removeSelectedProject(project.tmsProjectId)}
+                      className={`rounded-full w-4 h-4 flex items-center justify-center leading-none hover:bg-black/10 ${
+                        project.action === 'eligible' ? 'text-green-700' : 'text-orange-700'
+                      }`}
+                      aria-label={`Remove ${project.projectName}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

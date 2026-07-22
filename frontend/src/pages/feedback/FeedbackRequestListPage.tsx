@@ -255,15 +255,24 @@ const ResponseDrawer: React.FC<{ requestId: number | null; onClose: () => void }
 // ── PM Approval Modal ────────────────────────────────────────────────────────
 const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: () => void }> = ({ request, onClose, onSuccess }) => {
   const [mode, setMode] = useState<'approve' | null>(null); const [achievements, setAchievements] = useState('');
+  const [recipientName, setRecipientName] = useState(request?.recipientName ?? '');
+  const [recipientEmail, setRecipientEmail] = useState(request?.recipientEmail ?? '');
+  const [editingCustomer, setEditingCustomer] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipientEmail.trim());
 
   const handleSubmit = async () => {
     if (!achievements.trim()) return alert("Achievements are required.");
+    if (!recipientName.trim()) return alert("Customer name is required.");
+    if (!emailValid) return alert("That doesn't look like a valid email address.");
 
     setLoading(true);
     try {
       await api.post(`/api/feedback/requests/${request.id}/pm-approve`, {
         pmAchievements: achievements,
+        recipientName: recipientName.trim(),
+        recipientEmail: recipientEmail.trim(),
       });
       onSuccess();
     } catch (err: any) {
@@ -298,9 +307,55 @@ const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: 
                   <p style={{ margin: '2px 0 0', fontSize: 11, color: BRAND.textLight }}>ID: {request.projectId}</p>
                 </div>
                 <div style={{ padding: 12, background: BRAND.surface, borderRadius: 8, border: `1px solid ${BRAND.border}` }}>
-                  <p style={{ margin: '0 0 2px', fontSize: 10, fontWeight: 700, color: BRAND.textLight, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Customer</p>
-                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: BRAND.textDark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{request.recipientName}</p>
-                  <p style={{ margin: '2px 0 0', fontSize: 11, color: BRAND.textLight }}>{request.recipientEmail}</p>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: editingCustomer ? 6 : 2 }}>
+                    <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: BRAND.textLight, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Customer</p>
+                    {!editingCustomer && (
+                      <button
+                        onClick={() => setEditingCustomer(true)}
+                        style={{ border: 'none', background: 'none', padding: 0, fontSize: 10, fontWeight: 700, color: BRAND.green, cursor: 'pointer' }}
+                      >
+                        ✎ Edit
+                      </button>
+                    )}
+                  </div>
+
+                  {!editingCustomer ? (
+                    <>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: BRAND.textDark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{recipientName || '—'}</p>
+                      <p style={{ margin: '2px 0 0', fontSize: 11, color: BRAND.textLight }}>{recipientEmail || '—'}</p>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        value={recipientName}
+                        onChange={e => setRecipientName(e.target.value)}
+                        placeholder="Customer name"
+                        autoFocus
+                        style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, fontWeight: 600, color: BRAND.textDark, border: `1px solid ${BRAND.border}`, borderRadius: 6, padding: '5px 7px', marginBottom: 5, outline: 'none' }}
+                      />
+                      <input
+                        type="email"
+                        value={recipientEmail}
+                        onChange={e => setRecipientEmail(e.target.value)}
+                        placeholder="customer@email.com"
+                        style={{
+                          width: '100%', boxSizing: 'border-box', fontSize: 11, color: BRAND.textLight,
+                          border: `1px solid ${recipientEmail && !emailValid ? '#F87171' : BRAND.border}`,
+                          borderRadius: 6, padding: '5px 7px', outline: 'none',
+                        }}
+                      />
+                      {recipientEmail && !emailValid && (
+                        <p style={{ margin: '4px 0 0', fontSize: 10, color: '#DC2626' }}>Enter a valid email address.</p>
+                      )}
+                      <button
+                        onClick={() => setEditingCustomer(false)}
+                        style={{ marginTop: 6, border: 'none', background: 'none', padding: 0, fontSize: 10, fontWeight: 700, color: BRAND.textLight, cursor: 'pointer' }}
+                      >
+                        Done
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div style={{ padding: 12, background: BRAND.surface, borderRadius: 8, border: `1px solid ${BRAND.border}` }}>
                   <p style={{ margin: '0 0 2px', fontSize: 10, fontWeight: 700, color: BRAND.textLight, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Period of Perf.</p>
