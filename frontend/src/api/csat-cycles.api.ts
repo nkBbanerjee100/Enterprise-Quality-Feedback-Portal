@@ -6,6 +6,7 @@ import { CSATCycle, PaginatedResponse } from '../types/common.types';
 import {
   EnrolledProject, EnrollProjectsRequest, SetEligibilityRequest,
   CycleProjectsResponse, DeclineAdditionRequest, EnrollTriageAction,
+  AuditReportResponse,
 } from '../types/csat-cycle.types';
 
 export const csatCyclesApi = {
@@ -80,9 +81,16 @@ export const csatCyclesApi = {
     await api.delete(`/api/csat-cycles/${cycleId}`);
   },
 
-  // ── Addition approval (separate from the exemption flow above) ────────────
-  approveAddition: async (cycleId: number, enrollmentId: number): Promise<EnrolledProject> => {
-    const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/approve-addition`);
+  // ── Second-level exemption approval (separate from the eligibility flow
+  // above) — Management confirming/rejecting an exemption QM already
+  // approved. Approving EXEMPTS the project for good; rejecting sends it
+  // back to the Manager. Both require a reason. ─────────────────────────────
+  approveAddition: async (
+    cycleId: number,
+    enrollmentId: number,
+    payload: DeclineAdditionRequest = {},
+  ): Promise<EnrolledProject> => {
+    const r = await api.post(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}/approve-addition`, payload);
     return r.data;
   },
 
@@ -130,5 +138,13 @@ export const csatCyclesApi = {
 
   removeProject: async (cycleId: number, enrollmentId: number): Promise<void> => {
     await api.delete(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}`);
+  },
+
+  /** Every project in this cycle — added AND exempted — each with its
+   * final outcome and a full chronological reason trail (who decided
+   * what, when, and why) for auditing purposes. */
+  getAuditReport: async (cycleId: number, outcome?: 'added' | 'exempted'): Promise<AuditReportResponse> => {
+    const r = await api.get(`/api/csat-cycles/${cycleId}/audit-report`, { params: outcome ? { outcome } : {} });
+    return r.data;
   },
 };

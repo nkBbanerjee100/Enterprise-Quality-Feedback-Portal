@@ -73,11 +73,11 @@ export interface MyProjectItem {
   status: StagingStatus | null;   // null = no staging row yet — fully actionable
   selected_by: string | null;
   exemption_reason: string | null;
-  // Set only when this Manager exempted the project and Quality+Management
-  // overrode that, keeping it Eligible anyway — lets the Manager reopen
-  // their own decision one more time (see is_reopen).
+  // Explains a conflict in this project's chain — e.g. "the Manager
+  // exempted this, awaiting QM's approval" or "QM/Management rejected the
+  // exemption, your decision is needed again". null when there's nothing
+  // to explain.
   conflict_note: string | null;
-  is_reopen: boolean;
 }
 
 export interface SelectProjectItem {

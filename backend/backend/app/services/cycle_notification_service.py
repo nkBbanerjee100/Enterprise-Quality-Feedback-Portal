@@ -330,40 +330,42 @@ def notify_management_enrollment_final_review(
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def notify_manager_of_enrollment_final_decision(
+def notify_management_enrollment_second_level_review(
     *, local_db: Session, cycle_id: int, project_name: str, project_id: int,
-    enrollment_id: int, manager_emp_id: Optional[str], approved: bool,
-    decided_by_name: str, actor_emp_id: str,
+    enrollment_id: int, qm_name: str, exemption_reason: str, actor_emp_id: str,
 ) -> None:
     """Enrollment-level twin of staging_notification_service.py's
-    notify_manager_of_final_decision — same chain, just for a project being
-    added to an ALREADY-EXISTING cycle: Manager exempted it, Quality
-    reaffirmed eligible on recheck, Management had the final word. The
-    Manager who started the disagreement gets told how it landed.
+    notify_management_second_level_exemption_review — QM approved a
+    Manager's exemption, broadcast to MANAGEMENT that it needs their
+    second-level approval."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "An exemption needs your second-level approval"
+    message = f'{qm_name} approved exempting "{project_name}": "{exemption_reason}". Please give the final approval or reject it.'
 
-    manager_emp_id can be missing on rows from before this field was
-    tracked consistently — skip quietly rather than notify no one and also
-    rather than error out the decision itself over a notification.
-    """
+    local_db.add(Notification(
+        recipient_role="MANAGEMENT", actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_NEEDS_SECOND_LEVEL_REVIEW", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    local_db.flush()
+
+
+def notify_manager_of_qm_enrollment_exemption_rejection(
+    *, local_db: Session, cycle_id: int, manager_emp_id: Optional[str], project_name: str,
+    project_id: int, enrollment_id: int, qm_name: str, rejection_reason: str, actor_emp_id: str,
+) -> None:
+    """Enrollment-level twin of notify_manager_of_qm_exemption_rejection —
+    QM rejected the Manager's exemption, sent straight back to them."""
     if not manager_emp_id:
         return
 
     link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
-    title = "Final decision on your exemption"
-    if approved:
-        message = (
-            f'You marked "{project_name}" exempt, but Quality reaffirmed it eligible and '
-            f"{decided_by_name} has confirmed it eligible — it will be included in this cycle."
-        )
-    else:
-        message = (
-            f'{decided_by_name} agreed with your exemption — both you and Management have '
-            f'marked "{project_name}" exempt. It will not be included in this cycle.'
-        )
+    title = "Your exemption was rejected"
+    message = f'{qm_name} rejected exempting "{project_name}": "{rejection_reason}". Please review it again.'
 
     local_db.add(Notification(
         recipient_emp_id=manager_emp_id, actor_emp_id=actor_emp_id,
-        type="ENROLLMENT_MANAGER_FINAL_DECISION", title=title, message=message,
+        type="ENROLLMENT_QM_REJECTED_EXEMPTION", title=title, message=message,
         cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
     ))
     if EMAIL_NOTIFICATIONS_ENABLED:
@@ -373,7 +375,51 @@ def notify_manager_of_enrollment_final_decision(
                 EmailSender.send_email(to=recipient["email"], subject=title, body=f"{message}\n\n{link}",
                                         html_content=f"<p>{message}</p><p><a href='{link}'>View it</a></p>")
             except Exception as e:
-                print(f"[WARN] Failed to email manager {manager_emp_id}: {e}")
+                print(f"[WARN] Failed to email manager {manager_emp_id} of QM rejection: {e}")
+    local_db.flush()
+
+
+def notify_qm_of_management_enrollment_exemption_decision(
+    *, local_db: Session, cycle_id: int, qm_emp_id: Optional[str], project_name: str,
+    project_id: int, enrollment_id: int, decided_by_name: str, remarks: str, actor_emp_id: str,
+) -> None:
+    """Enrollment-level twin of notify_qm_of_management_exemption_decision
+    — Management approved the exemption at the second level; final, QM
+    gets told the outcome."""
+    if not qm_emp_id:
+        return
+
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "Exemption approved — project is exempt"
+    message = f'{decided_by_name} gave the second-level approval for exempting "{project_name}": "{remarks}". It will not be included in this cycle.'
+
+    local_db.add(Notification(
+        recipient_emp_id=qm_emp_id, actor_emp_id=actor_emp_id,
+        type="ENROLLMENT_MANAGEMENT_EXEMPTION_DECIDED", title=title, message=message,
+        cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+    ))
+    local_db.flush()
+
+
+def notify_manager_and_qm_of_management_enrollment_rejection(
+    *, local_db: Session, cycle_id: int, manager_emp_id: Optional[str], qm_emp_id: Optional[str],
+    project_name: str, project_id: int, enrollment_id: int,
+    decided_by_name: str, remarks: str, actor_emp_id: str,
+) -> None:
+    """Enrollment-level twin of notify_manager_and_qm_of_management_rejection
+    — Management rejected the second-level approval, it's back with the
+    Manager. Both the Manager and QM get told, so neither assumes it's
+    settled."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/{cycle_id}"
+    title = "Exemption rejected by Management"
+    message = f'{decided_by_name} rejected the exemption for "{project_name}": "{remarks}". It\'s back with the project\'s Manager to decide again.'
+
+    for recipient_emp_id in {manager_emp_id, qm_emp_id} - {None}:
+        local_db.add(Notification(
+            recipient_emp_id=recipient_emp_id, actor_emp_id=actor_emp_id,
+            type="ENROLLMENT_MANAGEMENT_REJECTED_EXEMPTION", title=title, message=message,
+            cycle_id=cycle_id, project_id=project_id, enrollment_id=enrollment_id, link=link,
+        ))
     local_db.flush()
 
 

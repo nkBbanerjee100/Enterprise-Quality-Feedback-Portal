@@ -136,3 +136,31 @@ export const ADDITION_APPROVAL_COLORS: Record<AdditionApprovalStatus, { bg: stri
   approved: { bg: '#D1FAE5', text: '#065F46', border: '#34D399' },
   declined: { bg: '#FEE2E2', text: '#991B1B', border: '#F87171' },
 };
+// ─── Audit Report ────────────────────────────────────────────────────────────
+// Every project in a cycle — added AND exempted — with its final outcome and
+// a full chronological reason trail, sourced from audit_logs rather than a
+// new table (see GET /{cycle_id}/audit-report).
+export interface AuditTimelineEntry {
+  at: string;
+  actor_name: string | null;
+  actor_role: string | null;
+  action: string;
+  reason: string | null;
+}
+ 
+export interface AuditReportProject {
+  project_id: number;
+  project_name: string;
+  final_status: 'added' | 'exempted';
+  current_reason: string | null;
+  timeline: AuditTimelineEntry[];
+}
+ 
+export interface AuditReportResponse {
+  cycle_id: number;
+  cycle_name: string;
+  total: number;
+  added: number;
+  exempted: number;
+  projects: AuditReportProject[];
+}

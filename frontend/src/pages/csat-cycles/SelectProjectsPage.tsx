@@ -61,7 +61,7 @@ function ReviewQueueModal({
   const [index, setIndex] = useState(0);
   const [exiting, setExiting] = useState<'approve' | 'decline' | null>(null);
   const [celebrate, setCelebrate] = useState(false);
-  const [confirmingDecline, setConfirmingDecline] = useState(false);
+  const [confirmingAction, setConfirmingAction] = useState<'approve' | 'decline' | null>(null);
 
   const decideMutation = useMutation({
     mutationFn: ({ stagingId, approve, remarks }: { stagingId: number; approve: boolean; remarks?: string }) =>
@@ -86,32 +86,30 @@ function ReviewQueueModal({
     setExiting(null);
   };
 
-  const runDecision = (approve: boolean, remarks?: string) => {
+  const runDecision = (approve: boolean, remarks: string) => {
     if (!current || exiting) return;
     setExiting(approve ? 'approve' : 'decline');
     decideMutation.mutate({ stagingId: current.staging_id, approve, remarks });
     window.setTimeout(advance, 280);
   };
 
+  // Both Approve Exemption (final exempt) and Reject Exemption (back to
+  // the Manager) need a reason now — neither fires instantly.
   const handleDecide = (approve: boolean) => {
     if (!current || exiting) return;
-    if (!approve) {
-      setConfirmingDecline(true);
-      return;
-    }
-    runDecision(true);
+    setConfirmingAction(approve ? 'approve' : 'decline');
   };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (celebrate || confirmingDecline) return;
+      if (celebrate || confirmingAction) return;
       if (e.key.toLowerCase() === 'a') handleDecide(true);
       if (e.key.toLowerCase() === 'd') handleDecide(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, exiting, celebrate, confirmingDecline]);
+  }, [index, exiting, celebrate, confirmingAction]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -148,16 +146,17 @@ function ReviewQueueModal({
                   Review {index + 1} of {items.length}
                 </p>
                 <h3 className="text-2xl font-bold leading-tight pr-6">{current.project_name}</h3>
-                <p className="text-sm text-white/70 mt-2">Selected by {current.selected_by}</p>
+                <p className="text-sm text-white/70 mt-2">QM approved by {current.quality_recheck_by ?? 'Quality'}</p>
               </div>
 
               <div className="px-7 py-6">
                 <p className="text-sm text-gray-500 mb-2">
-                  Quality reaffirmed this project as eligible after its Manager exempted it. Your call is final.
+                  QM approved exempting this project. This is the second-level approval — approving confirms
+                  the exemption for good; rejecting sends it back to the project's Manager to decide again.
                 </p>
                 {current.exemption_reason && (
                   <p className="text-xs text-gray-400 mb-6 bg-gray-50 rounded-lg px-3 py-2">
-                    Manager's exemption reason: "{current.exemption_reason}"
+                    QM's reason: "{current.exemption_reason}"
                   </p>
                 )}
                 <div className="flex gap-3">
@@ -165,17 +164,17 @@ function ReviewQueueModal({
                     onClick={() => handleDecide(false)}
                     className="flex-1 py-4 rounded-2xl border-2 border-red-100 text-red-600 font-bold text-sm hover:bg-red-50 hover:scale-[1.03] active:scale-95 transition-all"
                   >
-                    ✕ Decline
+                    ✕ Reject Exemption
                   </button>
                   <button
                     onClick={() => handleDecide(true)}
                     style={{ background: BRAND.green }}
                     className="flex-1 py-4 rounded-2xl text-white font-bold text-sm hover:opacity-90 hover:scale-[1.03] active:scale-95 transition-all shadow-lg shadow-green-900/20"
                   >
-                    ✓ Approve
+                    ✓ Approve Exemption
                   </button>
                 </div>
-                <p className="text-center text-[11px] text-gray-300 mt-4">Press A to approve · D to decline</p>
+                <p className="text-center text-[11px] text-gray-300 mt-4">Press A to approve · D to reject</p>
               </div>
             </div>
           </>
@@ -218,14 +217,16 @@ function ReviewQueueModal({
         )}
       </div>
 
-      {confirmingDecline && current && (
+      {confirmingAction && current && (
         <ExemptConfirmModal
           projectName={current.project_name}
-          message="This finalizes the project as Exempt — it will be removed from this cycle. This decision is final."
+          message={confirmingAction === 'approve'
+            ? 'This confirms the exemption for good — the project will be removed from this cycle.'
+            : 'This sends it back to the project\'s Manager to decide again.'}
           requireReason
-          confirmLabel="Yes, Decline"
-          onCancel={() => setConfirmingDecline(false)}
-          onConfirm={(reason) => { setConfirmingDecline(false); runDecision(false, reason); }}
+          confirmLabel={confirmingAction === 'approve' ? 'Approve Exemption' : 'Reject Exemption'}
+          onCancel={() => setConfirmingAction(null)}
+          onConfirm={(reason) => { const approve = confirmingAction === 'approve'; setConfirmingAction(null); runDecision(approve, reason || ''); }}
         />
       )}
     </div>
@@ -247,6 +248,16 @@ function CandidateRow({ candidate, onTriage, busy, onRequestExemptConfirm }: {
       requireReason: true,
       confirmLabel: 'Exempt',
       onConfirm: (reason) => onTriage('exempted', reason),
+    });
+  };
+
+  const handleEligible = () => {
+    onRequestExemptConfirm({
+      projectName: candidate.project_name,
+      message: 'This adds the project to the pool and sends it to its Manager to review.',
+      requireReason: false,
+      confirmLabel: 'Yes, Add',
+      onConfirm: () => onTriage('eligible'),
     });
   };
 
@@ -274,7 +285,7 @@ function CandidateRow({ candidate, onTriage, busy, onRequestExemptConfirm }: {
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <button
             disabled={busy}
-            onClick={() => onTriage('eligible')}
+            onClick={handleEligible}
             className={`px-2.5 py-1 text-xs font-semibold rounded-lg border whitespace-nowrap disabled:opacity-40 ${
               status === 'eligible' ? 'bg-green-600 text-white border-green-600' : 'border-green-300 text-green-700 hover:bg-green-50'
             }`}
@@ -310,8 +321,8 @@ function PendingDecisionRow({
     onRequestExemptConfirm({
       projectName: item.project_name,
       message: isRecheck
-        ? 'This confirms the Manager\u2019s exemption — the project will be removed from this cycle for good.'
-        : 'This sends the project to Quality to recheck before anything is finalized.',
+        ? 'This approves the exemption and sends it to Management for a second-level approval.'
+        : 'This sends the project to Quality (QM) to approve or reject the exemption.',
       requireReason: true,
       confirmLabel: isRecheck ? 'Approve Exemption' : 'Exempt',
       onConfirm: (reason) => onDecide('exempted', reason),
@@ -332,14 +343,23 @@ function PendingDecisionRow({
         <div className="flex flex-col items-center gap-1">
           <button
             disabled={busy}
-            onClick={() => onDecide('eligible')}
+            onClick={() => {
+              if (!isRecheck) { onDecide('eligible'); return; }
+              onRequestExemptConfirm({
+                projectName: item.project_name,
+                message: 'This rejects the exemption and sends it straight back to the Manager to decide again.',
+                requireReason: true,
+                confirmLabel: 'Reject Exemption',
+                onConfirm: (reason) => onDecide('eligible', reason),
+              });
+            }}
             className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
           >
             {isRecheck ? 'Reject Exemption' : '✓ Eligible'}
           </button>
           {isRecheck ? (
             <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
-              → sends to Management for final call
+              → sends back to the Manager
             </span>
           ) : context === 'manager' && (
             <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
@@ -357,11 +377,11 @@ function PendingDecisionRow({
           </button>
           {isRecheck ? (
             <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
-              final · removes from cycle
+              → sends to Management for second-level approval
             </span>
           ) : context === 'manager' && (
             <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-              → sends to Quality for recheck
+              → sends to QM (Quality) to approve or reject
             </span>
           )}
         </div>
@@ -574,17 +594,15 @@ export const SelectProjectsPage: React.FC = () => {
                 // decided/mid-review-elsewhere — otherwise the handful of
                 // projects actually waiting on the Manager get buried
                 // alphabetically among a couple dozen others.
-                const rank = (p: typeof a) => (p.status === 'pending_manager_review' || p.is_reopen) ? 0 : p.staging_id === null ? 1 : 2;
+                const rank = (p: typeof a) => p.status === 'pending_manager_review' ? 0 : p.staging_id === null ? 1 : 2;
                 return rank(a) - rank(b);
               }).map(item => {
                 // Actionable directly when there's no staging row yet (never
-                // touched by Quality), Quality already routed it here and
-                // it's still waiting, or Quality+Management overrode this
-                // Manager's own exemption and they get one more say
-                // (is_reopen) — anything else is mid-review or decided
-                // elsewhere, so it's read-only.
-                const actionable = item.staging_id === null || item.status === 'pending_manager_review' || item.is_reopen;
-                const meta = item.status && item.status !== 'pending_manager_review' && !item.is_reopen ? STAGING_STATUS_META[item.status] : null;
+                // touched by Quality) or Quality already routed it here and
+                // it's still waiting — anything else is mid-review or
+                // decided elsewhere, so it's read-only.
+                const actionable = item.staging_id === null || item.status === 'pending_manager_review';
+                const meta = item.status && item.status !== 'pending_manager_review' ? STAGING_STATUS_META[item.status] : null;
 
                 const decide = (action: TriageAction, reason?: string) => {
                   setBusyId(item.project_ext_id);
@@ -606,17 +624,13 @@ export const SelectProjectsPage: React.FC = () => {
                             : item.status === 'exempted' ? `Exempted${item.exemption_reason ? `: "${item.exemption_reason}"` : ''}`
                             : item.selected_by ? `Selected by ${item.selected_by}` : ''}
                         </p>
-                      ) : item.is_reopen ? (
-                        <p className="text-xs mt-0.5 font-medium" style={{ color: '#9B7C2A' }}>
-                          {item.conflict_note}
-                        </p>
                       ) : item.staging_id && (
                         <>
                           <span
                             className="inline-block mt-1 text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
                             style={{ background: '#FDF6E3', color: '#9B7C2A' }}
                           >
-                            Marked eligible by {item.selected_by ?? 'Quality'} — needs your review
+                            {item.conflict_note ? 'Back with you — needs your decision again' : `Marked eligible by ${item.selected_by ?? 'Quality'} — needs your review`}
                           </span>
                           {item.conflict_note && (
                             <p className="text-xs mt-1 font-medium" style={{ color: '#9B7C2A' }}>
@@ -631,13 +645,19 @@ export const SelectProjectsPage: React.FC = () => {
                         <div className="flex flex-col items-center gap-1">
                           <button
                             disabled={busyId === item.project_ext_id}
-                            onClick={() => decide('eligible')}
+                            onClick={() => setExemptConfirm({
+                              projectName: item.project_name,
+                              message: 'This confirms the project as eligible and adds it to the ready-for-cycle pool.',
+                              requireReason: false,
+                              confirmLabel: 'Yes, Add',
+                              onConfirm: () => decide('eligible'),
+                            })}
                             className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
                           >
                             ✓ Eligible
                           </button>
                           <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                            {item.is_reopen ? 'keeps it in the cycle' : 'final · adds to cycle'}
+                            final · adds to cycle
                           </span>
                         </div>
                         <div className="flex flex-col items-center gap-1">
@@ -645,9 +665,7 @@ export const SelectProjectsPage: React.FC = () => {
                             disabled={busyId === item.project_ext_id}
                             onClick={() => setExemptConfirm({
                               projectName: item.project_name,
-                              message: item.is_reopen
-                                ? 'Quality and Management already reviewed this — if you exempt it now, that\u2019s final and it will be removed from the cycle.'
-                                : 'This sends the project to Quality to recheck before anything is finalized.',
+                              message: 'This sends the project to QM (Quality) to approve or reject the exemption.',
                               requireReason: true,
                               confirmLabel: 'Exempt',
                               onConfirm: (reason) => decide('exempted', reason),
@@ -657,7 +675,7 @@ export const SelectProjectsPage: React.FC = () => {
                             ✕ Exempt
                           </button>
                           <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                            {item.is_reopen ? 'final · removes from cycle' : '→ sends to Quality for recheck'}
+                            → sends to QM (Quality) to approve or reject
                           </span>
                         </div>
                       </div>
@@ -858,13 +876,13 @@ export const SelectProjectsPage: React.FC = () => {
               </div>
             )}
 
-            {/* With Management */}
+            {/* With Management — second-level exemption approval */}
             {pendingManagement.length > 0 && (
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="px-5 py-3 border-b border-gray-50 flex items-center justify-between flex-wrap gap-2">
                   <div>
                     <span className="text-sm font-bold text-gray-800">With Management</span>
-                    <span className="ml-2 text-xs text-gray-500">{pendingManagement.length} awaiting final decision</span>
+                    <span className="ml-2 text-xs text-gray-500">{pendingManagement.length} awaiting second-level approval</span>
                   </div>
                   {isManagement && (
                     <button
@@ -880,7 +898,9 @@ export const SelectProjectsPage: React.FC = () => {
                   <div key={p.staging_id} className="flex items-center gap-4 px-5 py-3 border-b border-gray-50 last:border-b-0">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{p.project_name}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">Selected by {p.selected_by}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {p.conflict_note || `Approved by ${p.quality_recheck_by ?? 'QM'}`}
+                      </p>
                     </div>
                     <span
                       className="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap"

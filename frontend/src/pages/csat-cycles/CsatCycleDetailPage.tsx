@@ -12,7 +12,7 @@ import { projectsApi } from '../../api/projects.api';
 import { projectStagingApi } from '../../api/project-staging.api';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
-import { EnrolledProject } from '../../types/csat-cycle.types';
+import { EnrolledProject, AuditReportProject } from '../../types/csat-cycle.types';
 import { formatDate } from '../../utils/formatters';
 import { deriveStatus } from '../projects/ProjectListPage';
 import { currentHalf, precedingHalf, halfDates } from '../../utils/half-year';
@@ -42,27 +42,8 @@ const _PENDING_ADDITION_STATUSES = new Set([
   'pending_quality_recheck', 'pending_management_review',
 ]);
 
-// Quality/Management overrode this Manager's exemption and kept the
-// project Approved — but the Manager hasn't actually weighed in on that
-// outcome yet. addition_approved_by still holds whoever last approved it:
-// Management's emp_id right after the override, and the Manager's own
-// emp_id once they've reopened it and confirmed (or exempted, which moves
-// it out of 'approved' entirely). Until the Manager's the one who last
-// touched it, this can't be treated as genuinely ready — sending feedback
-// on a project the Manager might still veto would defeat the whole point
-// of giving them a reopen.
-function isReopenPending(p: EnrolledProject): boolean {
-  return (
-    p.addition_approval_status === 'approved'
-    && !!p.manager_decided_by
-    && !!p.quality_recheck_by
-    && p.addition_approved_by !== p.manager_emp_id
-  );
-}
-
 function getRowStatus(p: EnrolledProject): RowStatus {
   if (_PENDING_ADDITION_STATUSES.has(p.addition_approval_status)) return 'review';
-  if (isReopenPending(p)) return 'review';
   if (p.eligibility_status === 'eligible' || p.eligibility_status === 'approved') return 'ready';
   if (p.eligibility_status === 'pending_approval') return 'review';  // merged — "With manager" removed as its own bucket
   return 'not-eligible'; // exempted, declined
@@ -624,7 +605,7 @@ function ProjectSelectionReviewModal({
             style={{ background: BRAND.green }}
             className="px-5 py-2 text-sm text-white font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
           >
-            {submitting ? 'Submitting...' : 'Submit to Quality'}
+            {submitting ? 'Submitting...' : 'Submit'}
           </button>
         </div>
       </div>
@@ -726,8 +707,8 @@ function ManagerDecisionModal({
   );
 }
 
-// ─── Addition Decision Modal (separate from the exemption ManagerDecisionModal
-// above — this decides whether a newly-added project stays in the cycle) ──────
+// ─── Second-Level Exemption Decision Modal (Management confirming or
+// rejecting an exemption QM already approved) ──────────────────────────────
 function AdditionDecisionModal({
   project, cycleId, onClose, onDone,
 }: {
@@ -739,7 +720,7 @@ function AdditionDecisionModal({
   const mutation = useMutation({
     mutationFn: () =>
       decision === 'approved'
-        ? csatCyclesApi.approveAddition(cycleId, project.enrollment_id)
+        ? csatCyclesApi.approveAddition(cycleId, project.enrollment_id, { remarks })
         : csatCyclesApi.declineAddition(cycleId, project.enrollment_id, { remarks }),
     onSuccess: onDone,
   });
@@ -749,47 +730,48 @@ function AdditionDecisionModal({
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
         <div className="px-6 py-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
           <div>
-            <h3 className="font-bold text-amber-900">Final Review</h3>
+            <h3 className="font-bold text-amber-900">Second-Level Exemption Approval</h3>
             <p className="text-xs text-amber-700 mt-0.5">{project.project_name}</p>
           </div>
           <button onClick={onClose} className="text-amber-700 hover:text-amber-900 text-xl">×</button>
         </div>
         <div className="px-6 py-5 space-y-4">
           <p className="text-sm text-gray-600">
-            {project.quality_recheck_by_name || 'Quality'} reaffirmed this project as eligible after {project.manager_decided_by_name || 'its Manager'} exempted it. Your decision here is final.<br />
-            <strong>Approve</strong> to confirm it belongs in this cycle.<br />
-            <strong>Decline</strong> to mark it not eligible (a reason is required).
+            {project.quality_recheck_by_name || 'QM'} approved exempting this project after {project.manager_decided_by_name || 'its Manager'} requested it.<br />
+            <strong>Approve Exemption</strong> to confirm it exempt for good.<br />
+            <strong>Reject Exemption</strong> to send it back to the Manager to decide again.<br />
+            A reason is required either way.
           </p>
 
           <div className="flex gap-3">
             <button
-              onClick={() => setDecision('approved')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'approved'
+              onClick={() => setDecision('declined')}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'declined'
                 ? 'border-green-500 bg-green-50 text-green-800'
                 : 'border-gray-200 text-gray-600 hover:border-green-300'
                 }`}
             >
-              ✓ Approve
+              ✕ Reject Exemption
             </button>
             <button
-              onClick={() => setDecision('declined')}
-              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'declined'
+              onClick={() => setDecision('approved')}
+              className={`flex-1 py-3 rounded-xl text-sm font-semibold border-2 transition-all ${decision === 'approved'
                 ? 'border-red-400 bg-red-50 text-red-800'
                 : 'border-gray-200 text-gray-600 hover:border-red-300'
                 }`}
             >
-              ✕ Decline
+              ✓ Approve Exemption
             </button>
           </div>
 
-          {decision === 'declined' && (
+          {decision && (
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Reason (required)</label>
               <textarea
                 value={remarks}
                 onChange={e => setRemarks(e.target.value)}
                 rows={2}
-                placeholder="Why is this project not eligible?"
+                placeholder={decision === 'approved' ? 'Why is this project exempt?' : 'Why is the exemption being rejected?'}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none"
               />
             </div>
@@ -801,15 +783,155 @@ function AdditionDecisionModal({
           </button>
           <button
             onClick={() => mutation.mutate()}
-            disabled={!decision || (decision === 'declined' && !remarks.trim()) || mutation.isPending}
+            disabled={!decision || !remarks.trim() || mutation.isPending}
             className="px-5 py-2 text-sm font-semibold rounded-lg hover:opacity-90 disabled:opacity-50"
             style={{
-              background: decision === 'approved' ? '#059669' : decision === 'declined' ? '#DC2626' : '#9CA3AF',
+              background: decision === 'approved' ? '#DC2626' : decision === 'declined' ? '#059669' : '#9CA3AF',
               color: '#fff',
             }}
           >
             {mutation.isPending ? 'Submitting...' : 'Submit Decision'}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Audit Report Modal — every project in this cycle (added AND
+// exempted), with its final outcome and a full chronological reason
+// trail: who decided what, when, and why. Built for compliance/auditing —
+// answers "why was this exempted" with an actual paper trail, not just
+// the latest reason. ──────────────────────────────────────────────────────
+function AuditReportModal({ cycleId, onClose }: { cycleId: number; onClose: () => void }) {
+  const [outcomeFilter, setOutcomeFilter] = useState<'all' | 'added' | 'exempted'>('all');
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['auditReport', cycleId],
+    queryFn: () => csatCyclesApi.getAuditReport(cycleId),
+  });
+
+  const projects = data?.projects ?? [];
+  const visible = outcomeFilter === 'all' ? projects : projects.filter(p => p.final_status === outcomeFilter);
+
+  const exportCsv = () => {
+    const header = ['Project', 'Status', 'Current Reason', 'Timeline'];
+    const rows = projects.map(p => [
+      p.project_name,
+      p.final_status === 'added' ? 'Added to cycle' : 'Exempted',
+      p.current_reason ?? '',
+      p.timeline.map(t => `${formatDate(t.at)} — ${t.actor_name ?? 'Unknown'} (${t.actor_role ? t.actor_role.charAt(0) + t.actor_role.slice(1).toLowerCase() : ''}) → ${t.action}${t.reason ? ` — "${t.reason}"` : ''}`).join(' | '),
+    ]);
+    const escape = (v: string) => `"${(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [header, ...rows].map(r => r.map(escape).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${data?.cycle_name ?? 'cycle'}_audit_report.csv`.replace(/\s+/g, '_');
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center flex-shrink-0">
+          <div>
+            <h3 className="font-bold text-gray-800">Audit Report</h3>
+            {data && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                {data.cycle_name} · {data.total} project{data.total !== 1 ? 's' : ''} · {data.added} added · {data.exempted} exempted
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={exportCsv}
+              disabled={!data || projects.length === 0}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 whitespace-nowrap"
+            >
+              ⬇ Export CSV
+            </button>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+          </div>
+        </div>
+
+        <div className="px-6 pt-3 flex gap-2 flex-shrink-0">
+          {(['all', 'added', 'exempted'] as const).map(f => (
+            <button
+              key={f}
+              onClick={() => setOutcomeFilter(f)}
+              className={`px-3 py-1 text-xs font-semibold rounded-full whitespace-nowrap ${
+                outcomeFilter === f ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {f === 'all' ? `All (${projects.length})` : f === 'added' ? `Added (${data?.added ?? 0})` : `Exempted (${data?.exempted ?? 0})`}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {isLoading ? (
+            <LoadingSpinner text="Loading audit report..." />
+          ) : error ? (
+            <p className="text-sm text-red-600 text-center py-8">Couldn't load the audit report. Try again.</p>
+          ) : visible.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-8">No projects to show.</p>
+          ) : (
+            <div className="space-y-2">
+              {visible.map(p => (
+                <div key={p.project_id} className="border border-gray-100 rounded-xl overflow-hidden">
+                  <button
+                    onClick={() => setExpandedId(expandedId === p.project_id ? null : p.project_id)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50 text-left"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-800 truncate">{p.project_name}</p>
+                      {p.current_reason && (
+                        <p className="text-xs text-gray-500 mt-0.5 truncate">"{p.current_reason}"</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span
+                        className="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap"
+                        style={{
+                          background: p.final_status === 'added' ? '#D1FAE5' : '#FEE2E2',
+                          color: p.final_status === 'added' ? '#065F46' : '#991B1B',
+                        }}
+                      >
+                        {p.final_status === 'added' ? 'Added' : 'Exempted'}
+                      </span>
+                      <span className="text-gray-400 text-xs">{expandedId === p.project_id ? '▲' : '▼'}</span>
+                    </div>
+                  </button>
+
+                  {expandedId === p.project_id && (
+                    <div className="px-4 pb-4 pt-1 bg-gray-50 border-t border-gray-100">
+                      {p.timeline.length === 0 ? (
+                        <p className="text-xs text-gray-400 py-2">No recorded history for this project.</p>
+                      ) : (
+                        <ol className="mt-2 space-y-2">
+                          {p.timeline.map((t, i) => (
+                            <li key={i} className="text-xs text-gray-600 flex gap-2">
+                              <span className="text-gray-400 flex-shrink-0 w-32">{formatDate(t.at)}</span>
+                              <span className="flex-1">
+                                <strong>{t.actor_name ?? 'Unknown'}</strong>
+                                {t.actor_role && <span className="text-gray-400"> ({t.actor_role.charAt(0) + t.actor_role.slice(1).toLowerCase()})</span>}
+                                {' → '}{t.action}
+                                {t.reason && <span className="block text-gray-500 mt-0.5">"{t.reason}"</span>}
+                              </span>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -844,6 +966,7 @@ export const CsatCycleDetailPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'all' | RowStatus>('all');
   const [showHowThisWorks, setShowHowThisWorks] = useState(false);
   const [enrollModal, setEnrollModal] = useState(false);
+  const [auditReportOpen, setAuditReportOpen] = useState(false);
   const [approvalTarget, setApprovalTarget] = useState<EnrolledProject | null>(null);
   const [additionTarget, setAdditionTarget] = useState<EnrolledProject | null>(null);
   const [chainBusyId, setChainBusyId] = useState<number | null>(null);
@@ -921,25 +1044,49 @@ export const CsatCycleDetailPage: React.FC = () => {
     kind: 'manager' | 'quality-recheck' | 'exemption',
     approveOrEligible: boolean,
   ) => {
-    const needsReason = (kind !== 'exemption' && !approveOrEligible) || (kind === 'exemption' && approveOrEligible);
+    if (kind === 'manager' && approveOrEligible) {
+      // Eligible — no reason needed, just a plain "are you sure".
+      setExemptConfirm({
+        projectName: project.project_name,
+        message: 'This confirms the project as eligible and adds it to the cycle.',
+        requireReason: false,
+        confirmLabel: 'Yes, Add',
+        onConfirm: () => runChainDecide(project, kind, approveOrEligible),
+      });
+      return;
+    }
+
+    const needsReason =
+      (kind === 'manager' && !approveOrEligible) ||   // Exempt needs a reason
+      kind === 'quality-recheck' ||                     // QM: both Approve and Reject need one now
+      kind === 'exemption';                             // Management: both Approve and Reject need one now
     if (!needsReason) {
       runChainDecide(project, kind, approveOrEligible);
       return;
     }
 
+    // quality-recheck: approveOrEligible=true is "Reject Exemption" (sends
+    // back to the Manager); false is "Approve Exemption" (sends to
+    // Management for second-level approval, NOT final on its own anymore).
+    const isRecheckReject = kind === 'quality-recheck' && approveOrEligible;
     const isRecheckApprove = kind === 'quality-recheck' && !approveOrEligible;
     const isExemptionApprove = kind === 'exemption' && approveOrEligible;
+    const isExemptionReject = kind === 'exemption' && !approveOrEligible;
     setExemptConfirm({
       projectName: project.project_name,
-      message: isRecheckApprove
-        ? 'This confirms the Manager\u2019s exemption — the project will be removed from this cycle for good.'
-        : isExemptionApprove
-          ? 'This confirms the exemption Quality requested — the project will be removed from this cycle for good.'
-          : kind === 'manager'
-            ? 'This sends the project to Quality to recheck before anything is finalized.'
-            : 'This sends the project to Management to approve or reject the exemption.',
-      requireReason: !isExemptionApprove, // Management's Approve Exemption reuses Quality's original reason — no new one needed
-      confirmLabel: isRecheckApprove || isExemptionApprove ? 'Approve Exemption' : 'Exempt',
+      message: isRecheckReject
+        ? 'This sends it back to the project\u2019s Manager to decide again.'
+        : isRecheckApprove
+          ? 'This approves the exemption and sends it to Management for a second-level approval.'
+          : isExemptionApprove
+            ? 'This confirms the exemption Quality requested — the project will be removed from this cycle for good.'
+            : isExemptionReject
+              ? 'This rejects the exemption Quality requested — the project\u2019s own Manager will make the final call instead.'
+              : kind === 'manager'
+                ? 'This sends the project to QM (Quality) to approve or reject the exemption.'
+                : 'This sends the project to Management to approve or reject the exemption.',
+      requireReason: true,
+      confirmLabel: isRecheckReject ? 'Reject Exemption' : (isRecheckApprove || isExemptionApprove) ? 'Approve Exemption' : isExemptionReject ? 'Reject Exemption' : 'Exempt',
       onConfirm: (reason) => runChainDecide(project, kind, approveOrEligible, reason),
     });
   };
@@ -992,9 +1139,6 @@ export const CsatCycleDetailPage: React.FC = () => {
   // second badge and the permanent workflow banner.
   const rowSubtitle = (p: EnrolledProject, status: RowStatus): string => {
     if (status === 'review') {
-      if (isReopenPending(p)) {
-        return p.conflict_note || 'Quality and Management overrode the Manager\'s exemption — awaiting their final word.';
-      }
       switch (p.addition_approval_status) {
         case 'pending_manager_review':
           // The one case that gets a distinct, unmissable tag rather than
@@ -1011,11 +1155,11 @@ export const CsatCycleDetailPage: React.FC = () => {
             ? `${p.enrolled_by_name || 'Quality'} requested exemption: "${p.exemption_reason}" · awaiting Management`
             : `${p.enrolled_by_name || 'Quality'} requested exemption · awaiting Management`;
         case 'pending_quality_recheck':
-          return p.exemption_reason
-            ? `${p.manager_decided_by_name || 'The Manager'} marked exempt: "${p.exemption_reason}" · back with Quality to recheck`
-            : `${p.manager_decided_by_name || 'The Manager'} marked exempt · back with Quality to recheck`;
+          return p.conflict_note || (p.exemption_reason
+            ? `${p.manager_decided_by_name || 'The Manager'} exempted: "${p.exemption_reason}" · awaiting QM's approval`
+            : `${p.manager_decided_by_name || 'The Manager'} exempted this project · awaiting QM's approval`);
         case 'pending_management_review':
-          return `${p.quality_recheck_by_name || 'Quality'} reaffirmed eligible after ${p.manager_decided_by_name || 'the Manager'}'s exemption · awaiting Management's final call`;
+          return p.conflict_note || `${p.quality_recheck_by_name || 'QM'} approved the exemption · awaiting Management's second-level approval`;
         case 'pending':
           // Legacy rows only — no new addition can reach this value.
           return p.project_manager_name
@@ -1121,7 +1265,13 @@ export const CsatCycleDetailPage: React.FC = () => {
         </div>
 
         {/* Controls row */}
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => setAuditReportOpen(true)}
+            className="px-4 py-2 text-gray-600 text-sm font-medium rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center gap-2 whitespace-nowrap"
+          >
+            📋 Audit Report
+          </button>
           {canAddProjects && (
             <button
               onClick={() => setEnrollModal(true)}
@@ -1221,7 +1371,6 @@ export const CsatCycleDetailPage: React.FC = () => {
                           || (project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id)
                           || (project.addition_approval_status === 'pending_quality_recheck' && isQuality)
                           || (project.addition_approval_status === 'pending_management_exemption_review' && isManagement)
-                          || (isReopenPending(project) && isManager && project.manager_emp_id === user?.emp_id)
                         ) ? 'Needs your review' : undefined
                     }
                   />
@@ -1237,39 +1386,34 @@ export const CsatCycleDetailPage: React.FC = () => {
                         </button>
                       )}
 
-                      {(() => {
-                        const isPendingManagerReview = project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id;
-                        const isReopen = isReopenPending(project) && isManager && project.manager_emp_id === user?.emp_id;
-                        if (!isPendingManagerReview && !isReopen) return null;
-                        return (
-                          <>
-                            <div className="flex flex-col items-center gap-1">
-                              <button
-                                disabled={chainBusyId === project.enrollment_id}
-                                onClick={() => handleChainDecide(project, 'manager', true)}
-                                className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                              >
-                                ✓ Eligible
-                              </button>
-                              <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                                {isReopen ? 'keeps it in the cycle' : 'final · adds to cycle'}
-                              </span>
-                            </div>
-                            <div className="flex flex-col items-center gap-1">
-                              <button
-                                disabled={chainBusyId === project.enrollment_id}
-                                onClick={() => handleChainDecide(project, 'manager', false)}
-                                className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                              >
-                                ✕ Exempt
-                              </button>
-                              <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
-                                {isReopen ? 'final · removes from cycle' : '→ sends to Quality for recheck'}
-                              </span>
-                            </div>
-                          </>
-                        );
-                      })()}
+                      {project.addition_approval_status === 'pending_manager_review' && isManager && project.manager_emp_id === user?.emp_id && (
+                        <>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'manager', true)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              ✓ Eligible
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                              final · adds to cycle
+                            </span>
+                          </div>
+                          <div className="flex flex-col items-center gap-1">
+                            <button
+                              disabled={chainBusyId === project.enrollment_id}
+                              onClick={() => handleChainDecide(project, 'manager', false)}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              ✕ Exempt
+                            </button>
+                            <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[90px]">
+                              → sends to QM (Quality) to approve or reject
+                            </span>
+                          </div>
+                        </>
+                      )}
 
                       {project.addition_approval_status === 'pending_quality_recheck' && isQuality && (
                         <>
@@ -1282,7 +1426,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                               Reject Exemption
                             </button>
                             <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
-                              → sends to Management for final call
+                              → sends back to the Manager
                             </span>
                           </div>
                           <div className="flex flex-col items-center gap-1">
@@ -1294,7 +1438,7 @@ export const CsatCycleDetailPage: React.FC = () => {
                               Approve Exemption
                             </button>
                             <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[110px]">
-                              final · removes from cycle
+                              → sends to Management for second-level approval
                             </span>
                           </div>
                         </>
@@ -1395,6 +1539,9 @@ export const CsatCycleDetailPage: React.FC = () => {
           onCancel={() => setExemptConfirm(null)}
           onConfirm={(reason) => { const cb = exemptConfirm.onConfirm; setExemptConfirm(null); cb(reason); }}
         />
+      )}
+      {auditReportOpen && (
+        <AuditReportModal cycleId={cycleId} onClose={() => setAuditReportOpen(false)} />
       )}
     </PageWrapper>
   );

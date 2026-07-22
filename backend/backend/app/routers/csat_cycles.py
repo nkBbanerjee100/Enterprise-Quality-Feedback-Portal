@@ -1,4 +1,5 @@
 """CSAT Cycle routes — full implementation"""
+import json
 from datetime import datetime, date
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
@@ -10,6 +11,8 @@ from app.core.dependencies import get_current_user, require_role
 from app.models.csat_cycle import CSATCycle
 from app.models.project import Project
 from app.models.feedback_request import FeedbackRequest
+from app.models.project_staging import ProjectStaging
+from app.models.audit_log import AuditLog
 from app.models.cycle_project_enrollment import (
     CycleProjectEnrollment, EligibilityStatus, AdditionApprovalStatus,
 )
@@ -24,8 +27,9 @@ from app.services.cycle_notification_service import (
     notify_project_added_to_cycle, get_project_manager, get_project_managers_bulk,
     notify_manager_enrollment_needs_review, notify_quality_enrollment_needs_recheck,
     notify_management_enrollment_exemption_request, notify_quality_of_enrollment_exemption_decision,
-    notify_management_enrollment_final_review, notify_quality_role_enrollment_needs_recheck,
-    notify_manager_of_enrollment_final_decision, notify_quality_of_manager_project_submission,
+    notify_quality_role_enrollment_needs_recheck, notify_quality_of_manager_project_submission,
+    notify_management_enrollment_second_level_review, notify_manager_of_qm_enrollment_exemption_rejection,
+    notify_qm_of_management_enrollment_exemption_decision, notify_manager_and_qm_of_management_enrollment_rejection,
 )
 from app.services.audit_service import log_action, get_client_ip
 from app.schemas.audit import AuditActions
@@ -174,25 +178,35 @@ def _feedback_map_for(db: Session, cycle_id: int, tms_ext_ids: list[int]) -> dic
 
 def _enrollment_conflict_note(enr: CycleProjectEnrollment, name_map: dict) -> Optional[str]:
     """Enrollment-level twin of project_staging.py's _staging_conflict_note
-    — same two conflict shapes, same fields (this model mirrors
-    ProjectStaging's chain-tracking columns exactly).
+    — same three shapes, same fields (this model mirrors ProjectStaging's
+    chain-tracking columns exactly).
 
-    addition_approved_by being set while still PENDING_MANAGER_REVIEW is
-    what distinguishes "Management rejected the exemption, sending it
-    here" from the ordinary "Quality enrolled it as eligible" path into
-    the same status — the latter never touches addition_approved_by at
-    all, only Manager's own manager-decide, Management's decide-exemption,
-    and the final approve/decline-addition ever do.
+    1. PENDING_QUALITY_RECHECK: the Manager just exempted it — QM needs to
+       approve or reject that exemption.
+    2. PENDING_MANAGEMENT_REVIEW: QM approved the exemption — Management
+       needs to give (or withhold) the second-level approval.
+    3. PENDING_MANAGER_REVIEW with addition_decision_remarks set: not the
+       ordinary "Quality just enrolled it eligible" first pass — either QM
+       or Management rejected the exemption and bounced it back. Which one
+       rejected most recently is whichever of quality_recheck_at /
+       addition_approved_at is the later timestamp.
     """
     manager_name = name_map.get(enr.manager_decided_by, enr.manager_decided_by) if enr.manager_decided_by else None
-    quality_name = name_map.get(enr.enrolled_by, enr.enrolled_by) if enr.enrolled_by else None
+    quality_name = name_map.get(enr.quality_recheck_by, enr.quality_recheck_by) if enr.quality_recheck_by else None
     management_name = name_map.get(enr.addition_approved_by, enr.addition_approved_by) if enr.addition_approved_by else None
 
-    if enr.addition_approval_status == AdditionApprovalStatus.APPROVED and enr.manager_decided_by and enr.quality_recheck_by:
-        return f"Quality and Management chose to keep this project despite {manager_name}'s exemption."
+    if enr.addition_approval_status == AdditionApprovalStatus.PENDING_QUALITY_RECHECK and enr.manager_decided_by:
+        reason = f': "{enr.exemption_reason}"' if enr.exemption_reason else ''
+        return f"{manager_name} exempted this project{reason} — awaiting QM's approval."
 
-    if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGER_REVIEW and enr.addition_approved_by and not enr.manager_decided_by:
-        return f"{quality_name} wanted to exempt this project, but {management_name} disagreed — it's your call."
+    if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW and enr.quality_recheck_by:
+        reason = f': "{enr.exemption_reason}"' if enr.exemption_reason else ''
+        return f"{quality_name} approved this exemption{reason} — awaiting Management's second-level approval."
+
+    if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGER_REVIEW and enr.addition_decision_remarks:
+        management_rejected_last = enr.addition_approved_at and (not enr.quality_recheck_at or enr.addition_approved_at >= enr.quality_recheck_at)
+        rejector = management_name if management_rejected_last else quality_name
+        return f'{rejector} rejected the exemption: "{enr.addition_decision_remarks}" — your decision is needed again.'
 
     return None
 
@@ -799,7 +813,7 @@ def enroll_projects(
             actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
             actor_role=current_user["role"], ip_address=ip,
             entity_type="cycle_project_enrollment", entity_id=enr.id,
-            details={"cycle_id": cycle_id, "project_name": project.project_name, "outcome": outcome},
+            details={"cycle_id": cycle_id, "project_name": project.project_name, "outcome": outcome, "remarks": enr.exemption_reason},
         )
 
     return {"enrolled": enrolled, "skipped": skipped, "warnings": warnings}
@@ -879,11 +893,13 @@ def remove_project_from_cycle(
     db.commit()
 
 
-# ─── Addition Approval — the FINAL step of the chain (separate from the
-# exemption/eligibility flow) ──────────────────────────────────────────────
-# Only reachable after Quality reaffirms eligible post-Manager-exemption
-# (status PENDING_MANAGEMENT_REVIEW) — see manager_decide_enrollment and
-# quality_recheck_enrollment below for the earlier steps.
+# ─── Second-level exemption approval (separate from the eligibility flow)
+# — reachable only after QM approves a Manager's exemption (status
+# PENDING_MANAGEMENT_REVIEW) — see manager_decide_enrollment and
+# quality_recheck_enrollment above for the earlier steps. Despite the
+# route names ("approve/decline-addition"), Management is approving or
+# rejecting the EXEMPTION here, not the project's addition to the cycle —
+# approving EXEMPTS it for good; rejecting sends it back to the Manager.
 
 def _assert_can_decide_addition(current_user: dict) -> None:
     role = current_user.get("role")
@@ -891,7 +907,7 @@ def _assert_can_decide_addition(current_user: dict) -> None:
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Only Management can make this final decision.",
+        detail="Only Management can make this second-level exemption decision.",
     )
 
 
@@ -899,25 +915,31 @@ def _assert_can_decide_addition(current_user: dict) -> None:
 def approve_addition(
     cycle_id: int,
     enrollment_id: int,
+    payload: DeclineAdditionRequest,
     request: Request,
     db: Session = Depends(get_local_db),
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("MANAGEMENT")),
 ):
-    """Management's final call, approving. Only reachable from
-    pending_management_review (Quality reaffirmed eligible after a Manager
-    exemption)."""
+    """Management's second-level approval of QM's approved exemption —
+    confirms it. Final: the project is exempt for good. A reason is
+    required, same as every other step in this chain."""
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
     project = db.query(Project).filter(Project.id == enr.project_id).first()
 
     _assert_can_decide_addition(current_user)
 
     if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW:
-        raise HTTPException(status_code=400, detail="This project isn't awaiting your final review.")
+        raise HTTPException(status_code=400, detail="This project isn't awaiting your second-level exemption approval.")
+    if not (payload.remarks or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required to approve the exemption.")
 
-    enr.addition_approval_status = AdditionApprovalStatus.APPROVED
+    enr.addition_approval_status = AdditionApprovalStatus.DECLINED
     enr.addition_approved_by = current_user["emp_id"]
     enr.addition_approved_at = datetime.utcnow()
+    enr.addition_decision_remarks = payload.remarks
+    enr.eligibility_status = EligibilityStatus.EXEMPTED
+    enr.exemption_reason = payload.remarks
     db.commit()
     db.refresh(enr)
 
@@ -926,19 +948,19 @@ def approve_addition(
         actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks, "via": "enrollment_review"},
     )
 
     try:
-        notify_manager_of_enrollment_final_decision(
-            local_db=db, cycle_id=cycle_id, project_name=project.project_name,
-            project_id=project.id, enrollment_id=enr.id, manager_emp_id=enr.manager_emp_id,
-            approved=True, decided_by_name=current_user.get("name") or current_user["emp_id"],
+        notify_qm_of_management_enrollment_exemption_decision(
+            local_db=db, cycle_id=cycle_id, qm_emp_id=enr.quality_recheck_by,
+            project_name=project.project_name, project_id=project.id, enrollment_id=enr.id,
+            decided_by_name=current_user.get("name") or current_user["emp_id"], remarks=payload.remarks,
             actor_emp_id=current_user["emp_id"],
         )
         db.commit()
     except Exception as e:
-        print(f"[WARN] Failed to notify manager of final decision on enrollment {enr.id}: {e}")
+        print(f"[WARN] Failed to notify QM of second-level exemption decision on enrollment {enr.id}: {e}")
 
     pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
     return _enrollment_to_response(enr, project, pm_info, current_user)
@@ -954,27 +976,22 @@ def decline_addition(
     tms_db: Session = Depends(get_tms_db),
     current_user: dict = Depends(require_role("MANAGEMENT")),
 ):
-    """Management's final call, declining. A reason is mandatory — every
-    exempt step in this chain requires one. Only reachable from
-    pending_management_review."""
+    """Management doesn't confirm the exemption — it goes back to the
+    Manager for a fresh decision. A reason is mandatory, same as every
+    other step in this chain."""
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
     project = db.query(Project).filter(Project.id == enr.project_id).first()
 
     _assert_can_decide_addition(current_user)
 
     if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW:
-        raise HTTPException(status_code=400, detail="This project isn't awaiting your final review.")
+        raise HTTPException(status_code=400, detail="This project isn't awaiting your second-level exemption approval.")
     if not (payload.remarks or "").strip():
-        raise HTTPException(status_code=400, detail="An exemption reason is required to decline.")
+        raise HTTPException(status_code=400, detail="A reason is required to reject the exemption.")
 
-    pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
-
-    enr.addition_approval_status = AdditionApprovalStatus.DECLINED
-    enr.addition_approved_by = current_user["emp_id"]
-    enr.addition_approved_at = datetime.utcnow()
+    enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGER_REVIEW
     enr.addition_decision_remarks = payload.remarks
-    enr.eligibility_status = EligibilityStatus.EXEMPTED
-    enr.exemption_reason = payload.remarks
+    enr.exemption_reason = None
 
     db.commit()
     db.refresh(enr)
@@ -984,20 +1001,21 @@ def decline_addition(
         actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "remarks": payload.remarks, "via": "enrollment_review"},
     )
 
     try:
-        notify_manager_of_enrollment_final_decision(
-            local_db=db, cycle_id=cycle_id, project_name=project.project_name,
-            project_id=project.id, enrollment_id=enr.id, manager_emp_id=enr.manager_emp_id,
-            approved=False, decided_by_name=current_user.get("name") or current_user["emp_id"],
+        notify_manager_and_qm_of_management_enrollment_rejection(
+            local_db=db, cycle_id=cycle_id, manager_emp_id=enr.manager_emp_id, qm_emp_id=enr.quality_recheck_by,
+            project_name=project.project_name, project_id=project.id, enrollment_id=enr.id,
+            decided_by_name=current_user.get("name") or current_user["emp_id"], remarks=payload.remarks,
             actor_emp_id=current_user["emp_id"],
         )
         db.commit()
     except Exception as e:
-        print(f"[WARN] Failed to notify manager of final decision on enrollment {enr.id}: {e}")
+        print(f"[WARN] Failed to notify of second-level exemption rejection on enrollment {enr.id}: {e}")
 
+    pm_info = get_project_manager(_safe_int(project.project_id), tms_db) if _safe_int(project.project_id) else None
     return _enrollment_to_response(enr, project, pm_info, current_user)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1017,40 +1035,23 @@ def manager_decide_enrollment(
     enr = _get_enrollment_or_404(enrollment_id, cycle_id, db)
     project = db.query(Project).filter(Project.id == enr.project_id).first()
 
-    # Normal case: Quality enrolled it eligible, waiting on this Manager's
-    # first review. Reopen case: THIS Manager already exempted it, Quality
-    # and Management overrode that and kept it Approved anyway — but the
-    # Manager still gets the final say on their own project. Exempting here
-    # is genuinely final: everyone's already had their turn.
-    is_reopen = (
-        enr.addition_approval_status == AdditionApprovalStatus.APPROVED
-        and enr.manager_decided_by == current_user["emp_id"]
-        and enr.quality_recheck_by is not None
-    )
-    if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGER_REVIEW and not is_reopen:
+    if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGER_REVIEW:
         raise HTTPException(status_code=400, detail="This project isn't awaiting your review.")
     if enr.manager_emp_id != current_user["emp_id"]:
         raise HTTPException(status_code=403, detail="You can only decide on projects you're the assigned Manager for.")
     if payload.decision == EnrollTriageAction.EXEMPTED and not (payload.exemption_reason or "").strip():
-        raise HTTPException(status_code=400, detail="An exemption reason is required.")
+        raise HTTPException(status_code=400, detail="A reason is required to reject this project's eligibility.")
 
     decided_by_name = current_user.get("name") or current_user["emp_id"]
     enr.manager_decided_by = current_user["emp_id"]
     enr.manager_decided_at = datetime.utcnow()
 
     if payload.decision == EnrollTriageAction.EXEMPTED:
-        if is_reopen:
-            # Final, full stop — Quality and Management already weighed in
-            # once; this isn't sent back for another round.
-            enr.addition_approval_status = AdditionApprovalStatus.DECLINED
-            enr.addition_approved_by = current_user["emp_id"]
-            enr.addition_approved_at = datetime.utcnow()
-            enr.addition_decision_remarks = payload.exemption_reason
-            enr.eligibility_status = EligibilityStatus.EXEMPTED
-            enr.exemption_reason = payload.exemption_reason
-        else:
-            enr.addition_approval_status = AdditionApprovalStatus.PENDING_QUALITY_RECHECK
-            enr.exemption_reason = payload.exemption_reason
+        # Rejecting eligibility is treated exactly like exempting it
+        # outright — same downstream workflow either way: off to QM
+        # (Quality) for their approval/rejection of the exemption.
+        enr.addition_approval_status = AdditionApprovalStatus.PENDING_QUALITY_RECHECK
+        enr.exemption_reason = payload.exemption_reason
     else:
         enr.addition_approval_status = AdditionApprovalStatus.APPROVED
         enr.addition_approved_by = current_user["emp_id"]
@@ -1065,7 +1066,7 @@ def manager_decide_enrollment(
         actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "manager_decide"},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "manager_decide", "remarks": payload.exemption_reason},
     )
 
     try:
@@ -1102,24 +1103,24 @@ def quality_recheck_enrollment(
     project = db.query(Project).filter(Project.id == enr.project_id).first()
 
     if enr.addition_approval_status != AdditionApprovalStatus.PENDING_QUALITY_RECHECK:
-        raise HTTPException(status_code=400, detail="This project isn't awaiting a Quality recheck.")
-    if payload.decision == EnrollTriageAction.EXEMPTED and not (payload.exemption_reason or "").strip():
-        raise HTTPException(status_code=400, detail="An exemption reason is required.")
+        raise HTTPException(status_code=400, detail="This project isn't awaiting a QM decision.")
+    if not (payload.exemption_reason or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required, whether approving or rejecting the exemption.")
 
     decided_by_name = current_user.get("name") or current_user["emp_id"]
     enr.quality_recheck_by = current_user["emp_id"]
     enr.quality_recheck_at = datetime.utcnow()
 
     if payload.decision == EnrollTriageAction.EXEMPTED:
-        enr.addition_approval_status = AdditionApprovalStatus.DECLINED
-        enr.addition_approved_by = current_user["emp_id"]
-        enr.addition_approved_at = datetime.utcnow()
-        enr.addition_decision_remarks = payload.exemption_reason
-        enr.eligibility_status = EligibilityStatus.EXEMPTED
+        # QM APPROVES the exemption — not final yet, goes to Management for
+        # a second-level approval.
+        enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW
         enr.exemption_reason = payload.exemption_reason
     else:
-        enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW
+        # QM REJECTS the exemption — straight back to the Manager.
+        enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGER_REVIEW
         enr.exemption_reason = None
+        enr.addition_decision_remarks = payload.exemption_reason
 
     db.commit()
     db.refresh(enr)
@@ -1129,15 +1130,23 @@ def quality_recheck_enrollment(
         actor_emp_id=current_user["emp_id"], actor_name=decided_by_name,
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="cycle_project_enrollment", entity_id=enr.id,
-        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "quality_recheck"},
+        details={"cycle_id": cycle_id, "project_name": project.project_name if project else None, "via": "quality_recheck", "remarks": payload.exemption_reason},
     )
 
     try:
         if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGEMENT_REVIEW:
-            notify_management_enrollment_final_review(
+            notify_management_enrollment_second_level_review(
                 local_db=db, cycle_id=cycle_id, project_name=project.project_name,
                 project_id=project.id, enrollment_id=enr.id,
-                enrolled_by_name=decided_by_name, actor_emp_id=current_user["emp_id"],
+                qm_name=decided_by_name, exemption_reason=payload.exemption_reason,
+                actor_emp_id=current_user["emp_id"],
+            )
+        else:
+            notify_manager_of_qm_enrollment_exemption_rejection(
+                local_db=db, cycle_id=cycle_id, manager_emp_id=enr.manager_emp_id,
+                project_name=project.project_name, project_id=project.id, enrollment_id=enr.id,
+                qm_name=decided_by_name, rejection_reason=payload.exemption_reason,
+                actor_emp_id=current_user["emp_id"],
             )
         db.commit()
     except Exception as e:
@@ -1174,6 +1183,8 @@ def decide_enrollment_exemption(
 
     if enr.addition_approval_status != AdditionApprovalStatus.PENDING_MANAGEMENT_EXEMPTION_REVIEW:
         raise HTTPException(status_code=400, detail="This project isn't awaiting an exemption decision.")
+    if not (payload.remarks or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required, whether approving or rejecting the exemption.")
 
     decided_by_name = current_user.get("name") or current_user["emp_id"]
     enr.addition_approved_by = current_user["emp_id"]
@@ -1230,3 +1241,179 @@ def decide_enrollment_exemption(
         print(f"[WARN] Failed to notify for exemption decision on enrollment {enr.id}: {e}")
 
     return _enrollment_to_response(enr, project, pm_info, current_user)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /{cycle_id}/audit-report — every project in this cycle (added AND
+# exempted), each with its final outcome and a full chronological reason
+# trail: every decision made on it, by whom, and why — sourced from
+# audit_logs (already being written at every step in this chain, in both
+# this file and project_staging.py) rather than a new table. Solves the
+# "we can see it's exempted but not why, or who decided what along the
+# way" gap — the individual reason fields on the enrollment/staging rows
+# only ever hold the LATEST value at each stage, since a project can pass
+# through Manager -> QM -> Management more than once and each new decision
+# overwrites the last. audit_logs already has every one of those as its
+# own row, so this just assembles them per project instead of storing
+# anything new.
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/{cycle_id}/audit-report")
+def get_cycle_audit_report(
+    cycle_id: int,
+    outcome: Optional[str] = Query(None, description="Filter to 'added' or 'exempted' only"),
+    db: Session = Depends(get_local_db),
+    current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT", "MANAGER")),
+):
+    cycle = _get_cycle_or_404(cycle_id, db)
+
+    rows = (
+        db.query(CycleProjectEnrollment, Project)
+        .join(Project, Project.id == CycleProjectEnrollment.project_id)
+        .filter(CycleProjectEnrollment.cycle_id == cycle_id)
+        .all()
+    )
+    if not rows:
+        return {"cycle_id": cycle_id, "cycle_name": cycle.cycle_name, "total": 0, "added": 0, "exempted": 0, "projects": []}
+
+    # The staging row this enrollment was carried forward from, if any —
+    # some enrollments are added directly to an existing cycle later and
+    # never had one. Matched by project_id + converted_cycle_id since
+    # there's no direct FK either way between the two tables.
+    project_ids = [proj.id for _, proj in rows]
+    staging_by_project = {
+        s.project_id: s
+        for s in db.query(ProjectStaging).filter(
+            ProjectStaging.project_id.in_(project_ids),
+            ProjectStaging.converted_cycle_id == cycle_id,
+        ).all()
+    }
+
+    # One batched audit_logs query covering every enrollment AND every
+    # matched staging row, instead of two queries per project.
+    enrollment_ids = [str(enr.id) for enr, _ in rows]
+    staging_ids = [str(s.id) for s in staging_by_project.values()]
+    entity_filter = (
+        (AuditLog.entity_type == "cycle_project_enrollment") & (AuditLog.entity_id.in_(enrollment_ids))
+    )
+    if staging_ids:
+        entity_filter = entity_filter | (
+            (AuditLog.entity_type == "project_staging") & (AuditLog.entity_id.in_(staging_ids))
+        )
+    log_rows = db.query(AuditLog).filter(
+        AuditLog.success == True,  # noqa: E712
+        entity_filter,
+    ).order_by(AuditLog.created_at.asc()).all()
+
+    logs_by_enrollment: dict[str, list[AuditLog]] = {}
+    logs_by_staging: dict[str, list[AuditLog]] = {}
+    for log in log_rows:
+        if log.entity_type == "cycle_project_enrollment":
+            logs_by_enrollment.setdefault(log.entity_id, []).append(log)
+        elif log.entity_type == "project_staging":
+            logs_by_staging.setdefault(log.entity_id, []).append(log)
+
+    def _parse_details(raw: Optional[str]) -> dict:
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+
+    def _decision_label(action: str, details: dict) -> str:
+        """Translates the raw AuditActions constant + internal 'via'/
+        'decision' tags into a plain sentence fragment for display —
+        auditors shouldn't have to know what PROJECT_STAGING_TRIAGED or
+        pending_quality_recheck mean. Every decision point in this chain
+        logs one of a small number of shapes; this just names each one.
+        """
+        via = details.get("via")
+        decision = details.get("decision")  # only ever present on PROJECT_STAGING_TRIAGED entries
+
+        if action == "PROJECT_STAGING_TRIAGED":
+            if via in ("manager_self_select", "manager_decide"):
+                return "Marked Eligible" if decision == "eligible" else "Marked Exempt"
+            if via == "quality_recheck":
+                return "Approved Exemption" if decision == "pending_management_review" else "Rejected Exemption"
+            # via is empty on Quality's very first pick (POST /select)
+            return "Marked Eligible" if decision == "eligible" else "Requested Exemption"
+
+        if action in ("CYCLE_ADDITION_APPROVED", "CYCLE_ADDITION_DECLINED"):
+            approved = action == "CYCLE_ADDITION_APPROVED"
+            if via == "manager_decide":
+                return "Marked Eligible" if approved else "Marked Exempt"
+            if via == "quality_recheck":
+                # QM's "Reject Exemption" reaffirms eligible -> logged as
+                # APPROVED here; "Approve Exemption" -> logged as DECLINED.
+                return "Rejected Exemption" if approved else "Approved Exemption"
+            if via in ("exemption_decision", "staging_review", "enrollment_review"):
+                return "Approved Exemption" if approved else "Rejected Exemption"
+            return "Approved" if approved else "Declined"
+
+        if action == "PROJECT_ENROLLED":
+            outcome = details.get("outcome")
+            if outcome == "manager_self_exempt":
+                return "Marked Exempt"
+            if outcome == "exemption_requested":
+                return "Requested Exemption"
+            return "Added to Cycle"
+        if action == "CSAT_CYCLE_CREATED":
+            return "Cycle Created"
+        if action == "CYCLE_ELIGIBILITY_CHANGED":
+            return "Eligibility Changed"
+
+        return action.replace("_", " ").title()
+
+    def _timeline_entry(log: AuditLog) -> dict:
+        details = _parse_details(log.details)
+        # Only ever a real typed-in reason — never the raw status code that
+        # 'decision' holds, which isn't a reason and shouldn't display as one.
+        # Different call sites stash this under different keys ("remarks",
+        # "exemption_reason", or plain "reason" — e.g. CYCLE_ELIGIBILITY_CHANGED),
+        # so check all three.
+        reason = details.get("remarks") or details.get("exemption_reason") or details.get("reason")
+        return {
+            "at": log.created_at,
+            "actor_name": log.actor_name or log.actor_emp_id,
+            "actor_role": log.actor_role,
+            "action": _decision_label(log.action, details),
+            "reason": reason,
+        }
+
+    projects_out = []
+    added_count = 0
+    exempted_count = 0
+
+    for enr, proj in rows:
+        is_exempted = enr.eligibility_status == EligibilityStatus.EXEMPTED
+        if is_exempted:
+            exempted_count += 1
+        else:
+            added_count += 1
+
+        staging = staging_by_project.get(proj.id)
+        timeline = []
+        if staging:
+            timeline.extend(_timeline_entry(l) for l in logs_by_staging.get(str(staging.id), []))
+        timeline.extend(_timeline_entry(l) for l in logs_by_enrollment.get(str(enr.id), []))
+        timeline.sort(key=lambda t: t["at"])
+
+        projects_out.append({
+            "project_id": proj.id,
+            "project_name": proj.project_name,
+            "final_status": "exempted" if is_exempted else "added",
+            "current_reason": enr.exemption_reason,
+            "timeline": timeline,
+        })
+
+    if outcome in ("added", "exempted"):
+        projects_out = [p for p in projects_out if p["final_status"] == outcome]
+
+    return {
+        "cycle_id": cycle_id,
+        "cycle_name": cycle.cycle_name,
+        "total": len(rows),
+        "added": added_count,
+        "exempted": exempted_count,
+        "projects": projects_out,
+    }

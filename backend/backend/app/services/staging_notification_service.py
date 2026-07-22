@@ -137,48 +137,50 @@ def notify_quality_of_decision(
     local_db.flush()
 
 
-def notify_manager_of_final_decision(
-    *,
-    local_db: Session,
-    project_name: str,
-    project_id: int,
-    staging_id: int,
-    manager_emp_id: Optional[str],   # the Manager whose original exemption started this chain
-    approved: bool,                  # Management's final call: True = eligible, False = exempt
-    decided_by_name: str,            # the Management user who just decided
-    actor_emp_id: str,
+def notify_management_second_level_exemption_review(
+    *, local_db: Session, project_name: str, project_id: int, staging_id: int,
+    qm_name: str, exemption_reason: str, actor_emp_id: str,
 ) -> None:
-    """Notify the project's Manager once Management makes the FINAL call on
-    a project that went: Manager exempted it -> Quality reaffirmed it
-    eligible during recheck -> Management had the last word. The Manager
-    was the one who started this disagreement, so they're the one who
-    needs to hear how it was resolved — Quality already gets notified
-    separately (notify_quality_of_decision), this is the Manager's copy.
+    """QM approved a Manager's exemption — broadcast to everyone with role
+    MANAGEMENT that it now needs their second-level approval. Mirrors
+    notify_management_project_needs_review's broadcast shape, but this is a
+    distinct decision point (approving/rejecting an exemption someone else
+    already approved), not the original "not sure" eligibility flow."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "An exemption needs your second-level approval"
+    message = f'{qm_name} approved exempting "{project_name}": "{exemption_reason}". Please give the final approval or reject it.'
 
-    manager_emp_id can be missing on very old rows from before this field
-    was tracked consistently — skip quietly rather than notify no one and
-    also rather than error out the whole decision over a notification.
-    """
+    local_db.add(Notification(
+        recipient_role="MANAGEMENT",
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_NEEDS_SECOND_LEVEL_REVIEW",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,
+        link=link,
+    ))
+    local_db.flush()
+
+
+def notify_manager_of_qm_exemption_rejection(
+    *, local_db: Session, manager_emp_id: Optional[str], project_name: str, project_id: int,
+    staging_id: int, qm_name: str, rejection_reason: str, actor_emp_id: str,
+) -> None:
+    """QM rejected the Manager's exemption and sent it straight back to
+    them — the Manager needs to know why in case they want to reconsider
+    (or hold firm and let it go to QM again)."""
     if not manager_emp_id:
         return
 
     link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
-    title = "Final decision on your exemption"
-    if approved:
-        message = (
-            f'You marked "{project_name}" exempt, but Quality reaffirmed it eligible and '
-            f"{decided_by_name} has confirmed it eligible — it will be included in the cycle."
-        )
-    else:
-        message = (
-            f'{decided_by_name} agreed with your exemption — both you and Management have '
-            f'marked "{project_name}" exempt. It will not be included in the cycle.'
-        )
+    title = "Your exemption was rejected"
+    message = f'{qm_name} rejected exempting "{project_name}": "{rejection_reason}". Please review it again.'
 
     local_db.add(Notification(
         recipient_emp_id=manager_emp_id,
         actor_emp_id=actor_emp_id,
-        type="STAGED_PROJECT_MANAGER_FINAL_DECISION",
+        type="STAGED_PROJECT_QM_REJECTED_EXEMPTION",
         title=title,
         message=message,
         project_id=project_id,
@@ -191,14 +193,69 @@ def notify_manager_of_final_decision(
         if recipient and recipient.get("email"):
             try:
                 EmailSender.send_email(
-                    to=recipient["email"],
-                    subject=title,
-                    body=f"{message}\n\nSee it here: {link}",
+                    to=recipient["email"], subject=title,
+                    body=f"{message}\n\n{link}",
                     html_content=f"<p>{message}</p><p><a href='{link}'>View it</a></p>",
                 )
             except Exception as e:
-                print(f"[WARN] Failed to email manager {manager_emp_id} about final decision: {e}")
+                print(f"[WARN] Failed to email manager {manager_emp_id} of QM rejection: {e}")
 
+    local_db.flush()
+
+
+def notify_qm_of_management_exemption_decision(
+    *, local_db: Session, qm_emp_id: Optional[str], project_name: str, project_id: int,
+    staging_id: int, approved: bool, decided_by_name: str, remarks: str, actor_emp_id: str,
+) -> None:
+    """Management approved the exemption at the second level — final,
+    project is exempt. QM (who approved it up to this point) gets told the
+    outcome. Only fires for the approved case; a rejection notifies both
+    the Manager and QM together instead (see
+    notify_manager_and_qm_of_management_rejection)."""
+    if not qm_emp_id:
+        return
+
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "Exemption approved — project is exempt"
+    message = f'{decided_by_name} gave the second-level approval for exempting "{project_name}": "{remarks}". It will not be included in the cycle.'
+
+    local_db.add(Notification(
+        recipient_emp_id=qm_emp_id,
+        actor_emp_id=actor_emp_id,
+        type="STAGED_PROJECT_MANAGEMENT_EXEMPTION_DECIDED",
+        title=title,
+        message=message,
+        project_id=project_id,
+        enrollment_id=staging_id,
+        link=link,
+    ))
+    local_db.flush()
+
+
+def notify_manager_and_qm_of_management_rejection(
+    *, local_db: Session, manager_emp_id: Optional[str], qm_emp_id: Optional[str],
+    project_name: str, project_id: int, staging_id: int,
+    decided_by_name: str, remarks: str, actor_emp_id: str,
+) -> None:
+    """Management rejected the second-level exemption approval — it's back
+    with the Manager for a fresh decision. Both the Manager (whose original
+    exemption this traces back to) and QM (who'd approved it) need to know,
+    so neither assumes it's settled."""
+    link = f"{settings.FRONTEND_URL}/csat-cycles/select-projects"
+    title = "Exemption rejected by Management"
+    message = f'{decided_by_name} rejected the exemption for "{project_name}": "{remarks}". It\'s back with the project\'s Manager to decide again.'
+
+    for recipient_emp_id in {manager_emp_id, qm_emp_id} - {None}:
+        local_db.add(Notification(
+            recipient_emp_id=recipient_emp_id,
+            actor_emp_id=actor_emp_id,
+            type="STAGED_PROJECT_MANAGEMENT_REJECTED_EXEMPTION",
+            title=title,
+            message=message,
+            project_id=project_id,
+            enrollment_id=staging_id,
+            link=link,
+        ))
     local_db.flush()
 
 
