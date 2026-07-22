@@ -990,6 +990,8 @@ def decline_addition(
         raise HTTPException(status_code=400, detail="A reason is required to reject the exemption.")
 
     enr.addition_approval_status = AdditionApprovalStatus.PENDING_MANAGER_REVIEW
+    enr.addition_approved_by = current_user["emp_id"]
+    enr.addition_approved_at = datetime.utcnow()
     enr.addition_decision_remarks = payload.remarks
     enr.exemption_reason = None
 
