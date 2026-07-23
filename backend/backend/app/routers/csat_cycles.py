@@ -206,7 +206,7 @@ def _enrollment_conflict_note(enr: CycleProjectEnrollment, name_map: dict) -> Op
     if enr.addition_approval_status == AdditionApprovalStatus.PENDING_MANAGER_REVIEW and enr.addition_decision_remarks:
         management_rejected_last = enr.addition_approved_at and (not enr.quality_recheck_at or enr.addition_approved_at >= enr.quality_recheck_at)
         rejector = management_name if management_rejected_last else quality_name
-        return f'{rejector} rejected the exemption: "{enr.addition_decision_remarks}" — your decision is needed again.'
+        return f'{rejector} rejected the exemption: "{enr.addition_decision_remarks}" — Manager\'s decision is needed again.'
 
     return None
 
@@ -321,17 +321,45 @@ def create_csat_cycle(
     payload: CSATCycleCreate,
     request: Request,
     db: Session = Depends(get_local_db),
-    current_user: dict = Depends(require_role("QUALITY", "MANAGEMENT")),
+    current_user: dict = Depends(require_role("QUALITY")),
 ):
-    """Create a new CSAT cycle (H1: Jan–Jun, H2: Jul–Dec).
-    Quality and Management only — Managers approve project additions but
-    do not create cycles or add projects themselves."""
-    start, end = _half_dates(payload.year, payload.half)
+    """Create a new CSAT cycle with a name and a custom date range chosen
+    by Quality (QM) — no more fixed half-year windows. Only Quality can
+    create a cycle; every other role (Manager, Management) can only add
+    projects to one that already exists (see enroll_projects).
+
+    Validates:
+      - end_date is after start_date
+      - the new range doesn't overlap any existing (non-deleted) cycle's
+        range — two cycles can never cover the same period at once, which
+        would make "which cycle is this project's activity window" ambiguous.
+    """
+    if payload.end_date <= payload.start_date:
+        raise HTTPException(status_code=400, detail="End date must be after the start date.")
+
+    start_dt = datetime.combine(payload.start_date, datetime.min.time())
+    end_dt = datetime.combine(payload.end_date, datetime.max.time().replace(microsecond=0))
+
+    overlapping = db.query(CSATCycle).filter(
+        CSATCycle.deleted_at.is_(None),
+        CSATCycle.start_date <= end_dt,
+        CSATCycle.end_date >= start_dt,
+    ).first()
+    if overlapping:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'These dates overlap with an existing cycle, "{overlapping.cycle_name}" '
+                f'({overlapping.start_date.date()} \u2192 {overlapping.end_date.date()}). '
+                f"Choose a date range that doesn't overlap any existing cycle."
+            ),
+        )
+
     cycle = CSATCycle(
         cycle_name=payload.cycle_name,
         description=payload.description,
-        start_date=start,
-        end_date=end,
+        start_date=start_dt,
+        end_date=end_dt,
         is_active=True,
     )
     db.add(cycle)
@@ -343,7 +371,7 @@ def create_csat_cycle(
         actor_emp_id=current_user["emp_id"], actor_name=current_user.get("name"),
         actor_role=current_user["role"], ip_address=get_client_ip(request),
         entity_type="csat_cycle", entity_id=cycle.id,
-        details={"cycle_name": cycle.cycle_name, "year": payload.year, "half": payload.half},
+        details={"cycle_name": cycle.cycle_name, "start_date": str(payload.start_date), "end_date": str(payload.end_date)},
     )
     return _cycle_resp(cycle)
 

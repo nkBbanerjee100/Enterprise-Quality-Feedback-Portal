@@ -15,6 +15,12 @@ Lifecycle of a feedback request (fact_feedback_request):
      (POST /requests/{id}/send-to-customer) — only now is the customer
      actually emailed a survey link. The PM's achievements are carried into
      the customer-facing survey (GET /public?email=...) as a read-only field.
+  5. The customer follows the emailed link to /survey-access, verifies their
+     email via a one-time OTP (see auth/customer_otp), then lands on
+     /survey?email=... — GET /public?email=... and POST /public/submit below
+     are what that page actually calls. There is no token in this flow: the
+     OTP verification recorded against the email IS the access control (see
+     _has_verified_customer_access), checked fresh on every call.
 """
 import json
 import time
@@ -27,13 +33,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 
 from app.services.audit_service import log_action, get_client_ip
 from app.schemas.audit import AuditActions
-from app.schemas.feedback import (
-    FeedbackRequestPayload,
-    EditDraftPayload,
-    PMApprovePayload,
-    PMRejectPayload,
-    SurveySubmitPayload,
-)
+from app.schemas.feedback import EditDraftPayload
 
 from pydantic import BaseModel
 from typing import Optional, List
@@ -50,6 +50,7 @@ router = APIRouter()
 
 TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 
+
 class FeedbackRequestPayload(BaseModel):
     projectId: int
     recipientEmail: str
@@ -58,7 +59,6 @@ class FeedbackRequestPayload(BaseModel):
     message: Optional[str] = None
     cc: Optional[List[str]] = None
     periodOfPerformance: Optional[str] = None
-    message:             Optional[str] = None
 
 
 class PMApprovePayload(BaseModel):
@@ -72,35 +72,17 @@ class PMRejectPayload(BaseModel):
 
 
 class SurveySubmitPayload(BaseModel):
-    """Matches what CustomerSurveyPage.tsx actually POSTs: a single rich
+    """Matches what CustomerSurveyPage.tsx actually POSTs: email (identifies
+    which request this is — the current design has no token, the verified
+    OTP against this email IS the access control) plus a single rich data
     object (ratings, per-question comments, overall assessment, signature,
-    etc.), not a flat list of {questionId, value} pairs. Stored verbatim as
-    JSON in fact_feedback_response.response_data."""
+    etc.), not a flat list of {questionId, value} pairs. data is stored
+    verbatim as JSON in fact_feedback_response.response_data."""
+    email: str
     data: dict
 
 
-class VerifyTokenRequest(BaseModel):
-    email: str
-    token: str
-# ── Token helpers ──────────────────────────────────────────────────────────────
-
-def _create_survey_token(project_id: int, recipient_email: str) -> str:
-
-    characters = (
-        string.ascii_uppercase +
-        string.ascii_lowercase +
-        string.digits
-    )
-
-    return ''.join(
-        secrets.choice(characters)
-        for _ in range(12)
-    )
-
-
-def _hash_token(token: str) -> str:
-
-# ?????? Email builders ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? ─────────────────────────────────────────────────────────────
+# ── Email builders ──────────────────────────────────────────────────────────────
 
 def _build_email_html(
     recipient_name: str,
@@ -724,7 +706,11 @@ def send_to_customer(
         "sent_to": row.recipient_email,
         "message": "Feedback request email successfully sent."
     }
-    
+
+
+# ── Public survey endpoints (no auth — OTP-verified email is the access
+# control, checked fresh via _has_verified_customer_access on every call) ──────
+
 @router.get("/public")
 def get_public_survey(
     email: str = Query(...),
@@ -738,47 +724,8 @@ def get_public_survey(
         raise HTTPException(status_code=403, detail="Unauthorized email.")
 
     row = _get_survey_request_by_email(normalized_email, db)
-
     if not row:
         raise HTTPException(status_code=404, detail="No active survey found for this email.")
-    return {
-        "success": True,
-        "message": "Token verified successfully",
-        "token": data["token"]
-    }
-# ── Public survey endpoints (no auth) ──────────────────────────────────────────
-
-@router.get("/public/{token}")
-def get_survey_by_token(
-    token: str,
-    email: str = Query(..., description="Recipient email, must match the token's fact_feedback_request row."),
-    db: Session = Depends(get_local_db),
-    tms_db: Session = Depends(get_tms_db),
-):
-    """Return full survey context for the customer-facing page, including the
-    PM's achievements (read-only, pre-filled) for 'Overview on Project
-    Performance'.
-
-    Requires the recipient's email as well as the token. SurveyAccessPage.tsx
-    already verifies email+token together via /verify-token before it
-    navigates here — but that was only a client-side redirect. Anyone who
-    obtained just the token (a plain 12-char string, easy to share/leak) could
-    previously open /survey/{token} directly and skip that check entirely,
-    since this endpoint only ever validated the token, never who was holding
-    it. Requiring the matching email here too closes that bypass at the only
-    layer that actually matters — the server."""
-    row = db.execute(
-        text("SELECT * FROM fact_feedback_request WHERE token = :token LIMIT 1"),
-        {"token": token},
-    ).fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Invalid survey link.")
-    if row.recipient_email.strip().lower() != email.strip().lower():
-        # Deliberately the same generic message as "not found" — confirming
-        # a token exists but the email doesn't match would let someone
-        # enumerate/guess which email a given leaked token belongs to.
-        raise HTTPException(status_code=404, detail="Invalid survey link.")
     if row.status == "completed":
         raise HTTPException(status_code=409, detail="This feedback has already been submitted.")
     if row.expires_at and datetime.utcnow() > row.expires_at:
@@ -815,33 +762,8 @@ def submit_survey(body: SurveySubmitPayload, db: Session = Depends(get_local_db)
         raise HTTPException(status_code=403, detail="Unauthorized email.")
 
     req_row = _get_survey_request_by_email(normalized_email, db)
-
     if not req_row:
         raise HTTPException(status_code=404, detail="No active survey found for this email.")
-@router.post("/public/{token}/submit", status_code=status.HTTP_201_CREATED)
-def submit_survey(
-    token: str,
-    body: SurveySubmitPayload,
-    email: str = Query(..., description="Recipient email, must match the token's fact_feedback_request row."),
-    db: Session = Depends(get_local_db),
-):
-    """
-    Validate token AND recipient email, save the customer's full survey
-    response to fact_feedback_response.response_data, mark request completed.
-
-    Same email requirement as GET /public/{token} above, for the same
-    reason — a leaked/guessed token alone must not be enough to submit on
-    someone else's behalf.
-    """
-    req_row = db.execute(
-        text("SELECT id, status, expires_at, recipient_email FROM fact_feedback_request WHERE token = :token LIMIT 1"),
-        {"token": token},
-    ).fetchone()
-
-    if not req_row:
-        raise HTTPException(status_code=404, detail="Invalid survey link.")
-    if req_row.recipient_email.strip().lower() != email.strip().lower():
-        raise HTTPException(status_code=404, detail="Invalid survey link.")
     if req_row.status == "completed":
         raise HTTPException(status_code=409, detail="This feedback has already been submitted.")
     if req_row.expires_at and datetime.utcnow() > req_row.expires_at:
@@ -954,7 +876,3 @@ def get_request_responses(
         # (data.answers?.[0]?.submittedAt) keeps working without a frontend change.
         "answers": [{"submittedAt": r["submittedAt"]} for r in responses],
     }
-
-
-
-

@@ -47,38 +47,6 @@ export const SurveyAccessPage = () => {
     if (cooldownSeconds <= 0) {
       return;
     }
-  const [email, setEmail] = useState("");
-  const [token, setToken] = useState("");
-
-
-const [error,setError] = useState("");
-
-
-
-const verify = async()=>{
-
-    try{
-
-        const result = await verifySurveyToken({
-            email,
-            token
-        });
-
-
-        console.log(
-            "VERIFY RESPONSE",
-            result
-        );
-
-
-        if(result.success || result.valid){
-
-            navigate(
-                `/survey/${token}?email=${encodeURIComponent(email)}`
-            );
-
-        }
-        else{
 
     const timer = window.setInterval(() => {
       setCooldownSeconds((value) => Math.max(value - 1, 0));
@@ -193,16 +161,16 @@ const verify = async()=>{
         )}
 
         <button
-  className="w-full rounded-lg bg-green-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-70"
-  onClick={phase === 'otp' ? handleVerifyOtp : handleSendOtp}
-  disabled={
-    (phase === 'otp' && (!canVerifyOtp || verifying)) ||
-    (phase === 'email' && (!canRequestOtp || sending))
-  }
->
-  {phase === 'otp'
-    ? (verifying ? STATUS_TEXT.verifying : STATUS_TEXT.verify)
-    : (sending ? STATUS_TEXT.sending : sendButtonLabel)}
+          className="w-full rounded-lg bg-green-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-70"
+          onClick={phase === 'otp' ? handleVerifyOtp : handleSendOtp}
+          disabled={
+            (phase === 'otp' && (!canVerifyOtp || verifying)) ||
+            (phase === 'email' && (!canRequestOtp || sending))
+          }
+        >
+          {phase === 'otp'
+            ? (verifying ? STATUS_TEXT.verifying : STATUS_TEXT.verify)
+            : (sending ? STATUS_TEXT.sending : sendButtonLabel)}
         </button>
 
         {phase === 'otp' && (
@@ -229,5 +197,4 @@ const verify = async()=>{
       </div>
     </div>
   );
-};
 };

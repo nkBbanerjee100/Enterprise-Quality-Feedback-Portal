@@ -15,7 +15,6 @@ import { UserRole } from '../../types/auth.types';
 import { EnrolledProject, AuditReportProject } from '../../types/csat-cycle.types';
 import { formatDate } from '../../utils/formatters';
 import { deriveStatus } from '../projects/ProjectListPage';
-import { currentHalf, precedingHalf, halfDates } from '../../utils/half-year';
 
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 
@@ -128,9 +127,9 @@ function RowMenu({ items }: { items: { label: string; onClick: () => void; disab
 // that's what caused this to show 0 completed projects before this fix.
 
 function EnrollModal({
-  cycleId, enrolledIds, onClose, onDone,
+  cycleId, cycleStartDate, cycleEndDate, enrolledIds, onClose, onDone,
 }: {
-  cycleId: number; enrolledIds: Set<number>; onClose: () => void; onDone: () => void;
+  cycleId: number; cycleStartDate?: string; cycleEndDate?: string; enrolledIds: Set<number>; onClose: () => void; onDone: () => void;
 }) {
   const { user } = useAuthStore();
   // A Manager can only ever add their OWN projects (TMS PmId match) —
@@ -180,10 +179,12 @@ function EnrollModal({
     const active: any[] = [];
     const completed: any[] = [];
 
-    const today = new Date();
-    const cur = currentHalf(today);
-    const prev = precedingHalf(cur.year, cur.half);
-    const [windowStart, windowEnd] = halfDates(prev.year, prev.half);
+    // Active = still ongoing, or its end date falls OUTSIDE this cycle's
+    // own custom window. Completed = end date falls WITHIN it. Used to be
+    // "the preceding half-year" — now it's whatever date range Quality
+    // actually chose when creating this specific cycle.
+    const windowStart = cycleStartDate ? new Date(cycleStartDate) : null;
+    const windowEnd = cycleEndDate ? new Date(cycleEndDate) : null;
 
     for (const p of available) {
       const status = deriveStatus(p.end_date ?? null);
@@ -191,16 +192,16 @@ function EnrollModal({
         active.push(p);
       } else if (p.end_date) {
         const projectEnd = new Date(p.end_date);
-        if (projectEnd >= windowStart && projectEnd <= windowEnd) {
+        if (windowStart && windowEnd && projectEnd >= windowStart && projectEnd <= windowEnd) {
           completed.push(p);
         }
-        // else: completed outside the preceding-half window — don't show
+        // else: completed outside this cycle's own window — don't show
       }
     }
     active.sort((a, b) => a.project_name.localeCompare(b.project_name));
     completed.sort((a, b) => a.project_name.localeCompare(b.project_name));
     return { activeProjects: active, completedProjects: completed };
-  }, [data, enrolledIds, selectedProjects, search, pmFilter, yearFilter, isManagerRole, user?.emp_id]);
+  }, [data, enrolledIds, selectedProjects, search, pmFilter, yearFilter, isManagerRole, user?.emp_id, cycleStartDate, cycleEndDate]);
 
   const totalFiltered = activeProjects.length + completedProjects.length;
 
@@ -337,7 +338,9 @@ function EnrollModal({
                   >
                     {project.action === 'eligible' ? '✓' : '✕'} {project.projectName}
                     <button
+                      type="button"
                       onClick={() => removeSelectedProject(project.tmsProjectId)}
+                      disabled={submitting}
                       className={`rounded-full w-4 h-4 flex items-center justify-center leading-none hover:bg-black/10 ${
                         project.action === 'eligible' ? 'text-green-700' : 'text-orange-700'
                       }`}
@@ -355,47 +358,6 @@ function EnrollModal({
         {errorMsg && (
           <div className="mb-2 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg">
             {errorMsg}
-          </div>
-        )}
-        {false && selectedProjects.length > 0 && (
-          <div className="mx-5 mb-3 border border-green-200 rounded-lg overflow-hidden">
-            <div className="px-3 py-2 bg-green-50 flex items-center justify-between">
-              <span className="text-xs font-bold text-green-800">
-              Selected Projects ({selectedProjects.length})
-            </span>
-            <span className="text-xs text-green-700">
-              Review before submitting to Quality
-            </span>
-          </div>
-
-            <div className="max-h-40 overflow-y-auto divide-y divide-gray-100">
-              {selectedProjects.map(project => (
-                <div
-                  key={project.tmsProjectId}
-                  className="px-3 py-2 flex items-start gap-3 text-xs"
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-800 truncate">
-                      {project.projectName}
-                    </p>
-
-                    <p className="text-gray-500 mt-0.5">
-                      {project.action === 'eligible' ? 'Add to cycle' : 'Exempt from cycle'}
-                      {project.exemptionReason && ` — ${project.exemptionReason}`}
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => removeSelectedProject(project.tmsProjectId)}
-                    disabled={submitting}
-                    className="text-red-600 hover:text-red-800 font-medium"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
           </div>
         )}
 
@@ -1538,6 +1500,8 @@ export const CsatCycleDetailPage: React.FC = () => {
       {enrollModal && (
         <EnrollModal
           cycleId={cycleId}
+          cycleStartDate={(cycle as any)?.start_date}
+          cycleEndDate={(cycle as any)?.end_date}
           enrolledIds={enrolledTmsIds}
           onClose={() => setEnrollModal(false)}
           onDone={() => { setEnrollModal(false); invalidate(); }}

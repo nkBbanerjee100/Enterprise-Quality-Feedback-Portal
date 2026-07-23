@@ -306,6 +306,28 @@ def _get_customer_allowlist_row(local_db: Session, email: str):
     ).fetchone()
 
 
+def _get_recipient_feedback_row(local_db: Session, email: str):
+    """
+    Return the most recent feedback request where this email is the
+    RECIPIENT (fact_feedback_request.recipient_email) — never cc_emails.
+
+    This is the sole gate for customer OTP access: only the person named
+    as recipient (set at send time, editable only by the PM during
+    approval) is eligible for an OTP. Addresses on the CC list are never
+    checked here and can never receive or verify an OTP for the survey.
+    """
+    return local_db.execute(
+        text("""
+            SELECT id, recipient_email
+            FROM fact_feedback_request
+            WHERE LOWER(recipient_email) = LOWER(:email)
+            ORDER BY COALESCE(request_sent_at, created_at) DESC, id DESC
+            LIMIT 1
+        """),
+        {"email": email},
+    ).fetchone()
+
+
 def _get_latest_customer_otp(local_db: Session, email: str):
     return local_db.execute(
         text("""
@@ -715,9 +737,11 @@ async def send_survey_otp(
     local_db: Session = Depends(get_local_db),
 ):
     email = _normalize_email(payload.email)
-    allowed_row = _get_customer_allowlist_row(local_db, email)
+    recipient_row = _get_recipient_feedback_row(local_db, email)
 
-    if allowed_row is None:
+    if recipient_row is None:
+        # Not the recipient of any feedback request — includes anyone only
+        # CC'd, and anyone not tied to a request at all.
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized email.")
 
     latest_row = _get_latest_customer_otp(local_db, email)
@@ -781,8 +805,8 @@ async def verify_survey_otp(
     email = _normalize_email(payload.email)
     otp_value = payload.otp.strip()
 
-    allowed_row = _get_customer_allowlist_row(local_db, email)
-    if allowed_row is None:
+    recipient_row = _get_recipient_feedback_row(local_db, email)
+    if recipient_row is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized email.")
 
     otp_row = _get_latest_customer_otp(local_db, email)

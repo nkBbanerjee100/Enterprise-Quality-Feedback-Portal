@@ -179,7 +179,7 @@ function App() {
               path="/csat-cycles/select-projects"
               element={
                 <ProtectedRoute>
-                  <RoleProtectedRoute allowedRoles={[UserRole.QUALITY, UserRole.MANAGEMENT , UserRole.MANAGER]}>
+                  <RoleProtectedRoute allowedRoles={[]}>
                     <SelectProjectsPage />
                   </RoleProtectedRoute>
                 </ProtectedRoute>

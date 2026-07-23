@@ -255,4 +255,15 @@ CREATE TABLE `audit_logs` (
   CONSTRAINT `fk_audit_logs_actor` FOREIGN KEY (`actor_emp_id`) REFERENCES `csat_users` (`EmpId`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=509 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE customer_otp (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    otp_hash VARCHAR(255) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    verified BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_customer_otp_email ON customer_otp (email);
+
 SET FOREIGN_KEY_CHECKS = 1;

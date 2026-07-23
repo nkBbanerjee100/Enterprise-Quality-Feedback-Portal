@@ -146,7 +146,7 @@ def _staging_conflict_note(s: ProjectStaging, name_map: dict) -> Optional[str]:
     if s.status == StagingStatus.PENDING_MANAGER_REVIEW and s.decision_remarks:
         management_rejected_last = s.decided_at and (not s.quality_recheck_at or s.decided_at >= s.quality_recheck_at)
         rejector = management_name if management_rejected_last else quality_name
-        return f'{rejector} rejected the exemption: "{s.decision_remarks}" — your decision is needed again.'
+        return f'{rejector} rejected the exemption: "{s.decision_remarks}" — Manager\'s decision is needed again.'
 
     return None
 

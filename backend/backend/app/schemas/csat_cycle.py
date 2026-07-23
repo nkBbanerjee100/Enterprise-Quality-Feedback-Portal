@@ -1,7 +1,7 @@
 """CSAT Cycle schemas"""
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from enum import Enum
 
 
@@ -41,8 +41,8 @@ class AdditionApprovalStatus(str, Enum):
 class CSATCycleCreate(BaseModel):
     cycle_name: str
     description: Optional[str] = None
-    year: int
-    half: CycleHalf                 # H1 or H2 — drives start/end date
+    start_date: date
+    end_date: date
 
 
 class CSATCycleUpdate(BaseModel):

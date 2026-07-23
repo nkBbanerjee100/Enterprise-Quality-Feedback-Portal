@@ -307,7 +307,7 @@ const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: 
                   <p style={{ margin: '2px 0 0', fontSize: 11, color: BRAND.textLight }}>ID: {request.projectId}</p>
                 </div>
                 <div style={{ padding: 12, background: BRAND.surface, borderRadius: 8, border: `1px solid ${BRAND.border}` }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: editingCustomer ? 6 : 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: editingCustomer ? 8 : 2 }}>
                     <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: BRAND.textLight, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Customer</p>
                     {!editingCustomer && (
                       <button
@@ -326,33 +326,49 @@ const PMApprovalModal: React.FC<{ request: any; onClose: () => void; onSuccess: 
                     </>
                   ) : (
                     <>
+                      <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: BRAND.textLight, marginBottom: 3 }}>Name</label>
                       <input
                         type="text"
                         value={recipientName}
                         onChange={e => setRecipientName(e.target.value)}
                         placeholder="Customer name"
                         autoFocus
-                        style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, fontWeight: 600, color: BRAND.textDark, border: `1px solid ${BRAND.border}`, borderRadius: 6, padding: '5px 7px', marginBottom: 5, outline: 'none' }}
+                        style={{
+                          width: '100%', boxSizing: 'border-box', fontSize: 13, fontWeight: 600, color: BRAND.textDark,
+                          border: `1.5px solid ${BRAND.border}`, borderRadius: 6, padding: '7px 9px', marginBottom: 8, outline: 'none',
+                          background: '#fff',
+                        }}
+                        onFocus={e => { e.target.style.borderColor = BRAND.green; }}
+                        onBlur={e => { e.target.style.borderColor = BRAND.border; }}
                       />
+
+                      <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: BRAND.textLight, marginBottom: 3 }}>Email</label>
                       <input
                         type="email"
                         value={recipientEmail}
                         onChange={e => setRecipientEmail(e.target.value)}
                         placeholder="customer@email.com"
                         style={{
-                          width: '100%', boxSizing: 'border-box', fontSize: 11, color: BRAND.textLight,
-                          border: `1px solid ${recipientEmail && !emailValid ? '#F87171' : BRAND.border}`,
-                          borderRadius: 6, padding: '5px 7px', outline: 'none',
+                          width: '100%', boxSizing: 'border-box', fontSize: 13, fontWeight: 500, color: BRAND.textDark,
+                          background: '#fff',
+                          border: `1.5px solid ${recipientEmail && !emailValid ? '#F87171' : BRAND.border}`,
+                          borderRadius: 6, padding: '7px 9px', outline: 'none',
                         }}
+                        onFocus={e => { if (!(recipientEmail && !emailValid)) e.target.style.borderColor = BRAND.green; }}
+                        onBlur={e => { if (!(recipientEmail && !emailValid)) e.target.style.borderColor = BRAND.border; }}
                       />
                       {recipientEmail && !emailValid && (
                         <p style={{ margin: '4px 0 0', fontSize: 10, color: '#DC2626' }}>Enter a valid email address.</p>
                       )}
+
                       <button
                         onClick={() => setEditingCustomer(false)}
-                        style={{ marginTop: 6, border: 'none', background: 'none', padding: 0, fontSize: 10, fontWeight: 700, color: BRAND.textLight, cursor: 'pointer' }}
+                        style={{
+                          marginTop: 8, border: `1px solid ${BRAND.green}`, background: '#fff', padding: '4px 12px',
+                          borderRadius: 6, fontSize: 11, fontWeight: 700, color: BRAND.green, cursor: 'pointer',
+                        }}
                       >
-                        Done
+                        ✓ Done
                       </button>
                     </>
                   )}
