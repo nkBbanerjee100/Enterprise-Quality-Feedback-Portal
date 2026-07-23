@@ -181,6 +181,7 @@ export const AllowUserContent: React.FC = () => {
               <option value="SALES">Sales</option>
               <option value="MANAGER">Manager</option>
               <option value="MANAGEMENT">Management</option>
+              
             </select>
           </Field>
         </div>

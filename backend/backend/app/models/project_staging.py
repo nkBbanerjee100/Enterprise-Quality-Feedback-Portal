@@ -1,17 +1,41 @@
 """
 Project staging — the pre-cycle triage pool.
 
-Before a CSAT cycle exists, Quality selects candidate TMS projects and
-triages each one:
-  - eligible                  → ready to go straight into the next cycle
-  - pending_management_review → Quality wasn't sure; Management decides
-  - exempted                  → Quality is sure it doesn't belong; excluded
+Workflow (each exemption anywhere in this chain requires a mandatory
+reason):
+
+  1. Quality reviews a candidate project:
+       - Eligible  -> goes to the project's own Manager (PM) for review.
+       - Exempt    -> mandatory reason; goes to Management to approve or
+                      reject the exemption.
+
+  1b. Management decides Quality's exemption request:
+       - Approve exemption -> final Exempt.
+       - Reject exemption  -> project is now Eligible; goes to the
+                               project's own Manager for review, same as
+                               if Quality had marked it Eligible directly.
+
+  2. The project's Manager reviews it (only they can — matched against the
+     TMS PmId):
+       - Eligible  -> final. Added straight in — no further Quality/
+                      Management review needed.
+       - Exempt    -> mandatory reason; goes BACK to Quality to recheck.
+
+  3. Quality rechecks (only reached after a Manager exemption):
+       - Exempt    -> mandatory reason; OUT of the cycle immediately, final.
+       - Eligible  -> goes to Management for a final decision.
+
+  4. Management makes the final call (only reached after Quality reaffirms
+     eligible post-Manager-exemption):
+       - Approve   -> final Eligible.
+       - Decline   -> mandatory reason; final Exempt.
 
 This is intentionally separate from CycleProjectEnrollment's own
 addition-approval flow — that one gates adding MORE projects to an
-ALREADY-EXISTING cycle later, and still goes to Management or the specific
-project's Manager (PM). This one is a Management-only review of the initial
-project pool, before any cycle exists at all.
+ALREADY-EXISTING cycle later (see csat_cycles.py's enroll_projects), and a
+Manager there can also add their own projects directly, auto-approved. This
+one is the pre-cycle triage of the initial project pool, before any cycle
+exists at all.
 """
 import enum
 from sqlalchemy import Column, Integer, String, DateTime, Text
@@ -20,9 +44,20 @@ from app.models import Base
 
 
 class StagingStatus(str, enum.Enum):
-    ELIGIBLE = "eligible"
+    PENDING_MANAGEMENT_EXEMPTION_REVIEW = "pending_management_exemption_review"  # Quality requested exempt; Management approves (final Exempt) or rejects (straight to Eligible) the exemption — no Manager hand-off either way
+    PENDING_MANAGER_REVIEW = "pending_manager_review"        # Quality said eligible; waiting on the project's Manager — the Manager's decision here is FINAL
+    ELIGIBLE = "eligible"      # final — ready for the cycle
+    EXEMPTED = "exempted"      # final — excluded; always carries exemption_reason
+    # Legacy values — no longer reachable from new decisions as of the fix
+    # that made the Manager's PENDING_MANAGER_REVIEW call final. Previously
+    # a Manager's exemption bounced to Quality (PENDING_QUALITY_RECHECK),
+    # who could reaffirm eligible and send it to Management
+    # (PENDING_MANAGEMENT_REVIEW) — a three-role ping-pong that could take
+    # two extra round trips to resolve. Kept only so pre-existing rows
+    # already in one of these states still deserialize/display correctly;
+    # /quality-recheck and /decide remain available to resolve them.
+    PENDING_QUALITY_RECHECK = "pending_quality_recheck"
     PENDING_MANAGEMENT_REVIEW = "pending_management_review"
-    EXEMPTED = "exempted"
 
 
 class ProjectStaging(Base):
@@ -34,14 +69,31 @@ class ProjectStaging(Base):
     project_id = Column(Integer, nullable=False, index=True)      # dim_projects.id (local)
     project_ext_id = Column(String(50), nullable=False, index=True)  # TMS project id, as string
 
-    status = Column(String(30), default=StagingStatus.ELIGIBLE, nullable=False)
+    status = Column(String(40), default=StagingStatus.PENDING_MANAGER_REVIEW, nullable=False)
 
-    selected_by = Column(String(50), nullable=False)   # emp_id of the Quality/Management user who triaged it
+    selected_by = Column(String(50), nullable=False)   # emp_id of the Quality user who triaged it
     selected_at = Column(DateTime, server_default=func.now())
 
-    decided_by = Column(String(50), nullable=True)     # Management emp_id who approved/declined a "not sure"
+    # The project's assigned Manager (TMS PmId), resolved and cached the
+    # moment Quality marks it eligible — so the manager-decide endpoint can
+    # check "is this you?" without a fresh TMS round trip, and so the pool
+    # listing can show/filter "awaiting review from" without one either.
+    manager_emp_id = Column(String(50), nullable=True)
+    manager_decided_by = Column(String(50), nullable=True)
+    manager_decided_at = Column(DateTime, nullable=True)
+
+    quality_recheck_by = Column(String(50), nullable=True)
+    quality_recheck_at = Column(DateTime, nullable=True)
+
+    decided_by = Column(String(50), nullable=True)     # Management emp_id who made the final approve/decline
     decided_at = Column(DateTime, nullable=True)
     decision_remarks = Column(Text, nullable=True)
+
+    # Mandatory whenever status becomes EXEMPTED, regardless of which stage
+    # (Quality's initial pass, Quality's recheck, or Management's final
+    # decline) produced it — always reflects the reason for the CURRENT
+    # exemption, not necessarily the first one along the way.
+    exemption_reason = Column(Text, nullable=True)
 
     # Set once this staged project has been enrolled into a real cycle via
     # the "create cycle from staging" step — excluded from the active pool

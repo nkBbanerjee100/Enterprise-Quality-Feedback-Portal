@@ -6,6 +6,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -100,6 +101,9 @@ const LockIcon = () => (
 export const CustomerSurveyPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const email = searchParams.get('email')?.trim().toLowerCase() || '';
+  const { token } = useParams<{ token: string }>();
+  const [searchParams] = useSearchParams();
+  const email = searchParams.get('email') || '';
 
   const [step, setStep] = useState<Step>('loading');
   const [meta, setMeta] = useState<SurveyMeta | null>(null);
@@ -129,11 +133,18 @@ export const CustomerSurveyPage: React.FC = () => {
   // Load the survey after OTP verification using the verified email from the URL.
   useEffect(() => {
     if (!email) {
+    if (!token || !email) {
+      // A direct link needs BOTH — landing here with just a token (no
+      // ?email=) means SurveyAccessPage's verification step was skipped
+      // entirely, e.g. someone opened /survey/{token} directly with a
+      // leaked/guessed token. The backend now requires email too, so
+      // there's no point even calling it without one.
       setStep('error');
       return;
     }
 
     fetch(`${API_BASE}/api/feedback/public?email=${encodeURIComponent(email)}`)
+    fetch(`${API_BASE}/api/feedback/public/${token}?email=${encodeURIComponent(email)}`)
       .then(async res => {
         if (res.status === 404) { setStep('error'); return; }
         if (res.status === 409) { setStep('already_submitted'); return; }
@@ -150,6 +161,7 @@ export const CustomerSurveyPage: React.FC = () => {
       })
       .catch(() => setStep('error'));
   }, [email]);
+  }, [token, email]);
 
   // ── Auto-calculate Overall Rating ──────────────────────────────────────
   useEffect(() => {
@@ -212,6 +224,12 @@ export const CustomerSurveyPage: React.FC = () => {
 
     if (overallRating === null) newErrors['overallRating'] = 'Required';
     if (!overallAssessment) newErrors['overallAssessment'] = 'Required';
+    if (
+      ['Poor', 'Average', 'Good'].includes(overallAssessment) &&
+      !areasToImprove.trim()
+    ) {
+      newErrors['areasToImprove'] = 'Required';
+    }
     if (!respondentName.trim()) newErrors['respondentName'] = 'Required';
     if (!signature.trim()) newErrors['signature'] = 'Required';
 
@@ -227,6 +245,7 @@ export const CustomerSurveyPage: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!validate() || !email) return;
+    if (!validate() || !token || !email) return;
     setSubmitting(true);
     try {
       const payloadData = {
@@ -247,6 +266,7 @@ export const CustomerSurveyPage: React.FC = () => {
       };
 
       const res = await fetch(`${API_BASE}/api/feedback/public/submit`, {
+      const res = await fetch(`${API_BASE}/api/feedback/public/${token}/submit?email=${encodeURIComponent(email)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, data: payloadData }),
@@ -551,12 +571,32 @@ export const CustomerSurveyPage: React.FC = () => {
             <div className="border border-green-200 rounded-lg p-1 bg-[#fcfdfc]">
               <div className="flex items-center space-x-2 p-3 pb-2 text-gray-800 font-semibold text-sm">
                 <ImproveIcon />
-                <span>Areas you would like us to improve on or/and<br/>any other suggestions: <span className="text-gray-500 text-xs font-normal">(Optional)</span></span>
+                <span>
+  Areas you would like us to improve on or/and<br />
+  any other suggestions:{' '}
+  {['Poor', 'Average', 'Good'].includes(overallAssessment) ? (
+<span className="text-red-500 text-xs font-normal">(Required)</span>
+  ) : (
+<span className="text-gray-500 text-xs font-normal">(Optional)</span>
+  )}
+</span>
+                {/* <span>Areas you would like us to improve on or/and<br/>any other suggestions: <span className="text-gray-500 text-xs font-normal">(Optional)</span></span> */}
               </div>
               <div className="relative">
                 <textarea 
                   value={areasToImprove}
-                  onChange={e => setAreasToImprove(e.target.value)}
+                  // onChange={e => setAreasToImprove(e.target.value)}
+                  onChange={e => {
+  setAreasToImprove(e.target.value);
+ 
+  if (e.target.value.trim()) {
+    setErrors(prev => {
+      const next = { ...prev };
+      delete next.areasToImprove;
+      return next;
+    });
+  }
+}}
                   className="w-[calc(100%-8px)] border border-gray-200 bg-white rounded p-4 m-1 min-h-[100px] text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-green-500 block resize-y"
                   placeholder="Type your suggestions here..."
                 />

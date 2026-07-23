@@ -17,6 +17,10 @@ Lifecycle of a feedback request (fact_feedback_request):
      the customer-facing survey (GET /public?email=...) as a read-only field.
 """
 import json
+import time
+import string
+import secrets
+import re
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
@@ -54,6 +58,47 @@ class FeedbackRequestPayload(BaseModel):
     message: Optional[str] = None
     cc: Optional[List[str]] = None
     periodOfPerformance: Optional[str] = None
+    message:             Optional[str] = None
+
+
+class PMApprovePayload(BaseModel):
+    pmAchievements: str
+    recipientName: Optional[str] = None
+    recipientEmail: Optional[str] = None
+
+
+class PMRejectPayload(BaseModel):
+    pmRejectionComments: str
+
+
+class SurveySubmitPayload(BaseModel):
+    """Matches what CustomerSurveyPage.tsx actually POSTs: a single rich
+    object (ratings, per-question comments, overall assessment, signature,
+    etc.), not a flat list of {questionId, value} pairs. Stored verbatim as
+    JSON in fact_feedback_response.response_data."""
+    data: dict
+
+
+class VerifyTokenRequest(BaseModel):
+    email: str
+    token: str
+# ── Token helpers ──────────────────────────────────────────────────────────────
+
+def _create_survey_token(project_id: int, recipient_email: str) -> str:
+
+    characters = (
+        string.ascii_uppercase +
+        string.ascii_lowercase +
+        string.digits
+    )
+
+    return ''.join(
+        secrets.choice(characters)
+        for _ in range(12)
+    )
+
+
+def _hash_token(token: str) -> str:
 
 # ?????? Email builders ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? ─────────────────────────────────────────────────────────────
 
@@ -504,13 +549,24 @@ def pm_approve(
     if row.pm_approval_status != "pending_pm":
         raise HTTPException(status_code=400, detail="Only requests awaiting PM review can be approved.")
 
+    # The PM is often the one who actually knows the right customer contact
+    # — Quality may have the wrong name or a stale email when they first
+    # drafted this. Both optional: only touched if the PM actually changed
+    # something, so old callers (and old frontend builds) still work
+    # unchanged with just pmAchievements.
+    recipient_name = (payload.recipientName or "").strip() or row.recipient_name
+    recipient_email = (payload.recipientEmail or "").strip() or row.recipient_email
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", recipient_email):
+        raise HTTPException(status_code=400, detail="That doesn't look like a valid email address.")
+
     db.execute(
         text("""
             UPDATE fact_feedback_request
-            SET pm_approval_status = 'approved', pm_achievements = :achievements, pm_rejection_comments = NULL
+            SET pm_approval_status = 'approved', pm_achievements = :achievements, pm_rejection_comments = NULL,
+                recipient_name = :recipient_name, recipient_email = :recipient_email
             WHERE id = :id
         """),
-        {"achievements": payload.pmAchievements, "id": request_id},
+        {"achievements": payload.pmAchievements, "id": request_id, "recipient_name": recipient_name, "recipient_email": recipient_email},
     )
     db.commit()
 
@@ -522,7 +578,7 @@ def pm_approve(
         actor_emp_id=current_user.get("emp_id"),
         notif_type="FEEDBACK_PM_APPROVED",
         title="A feedback form was approved by the PM",
-        message=f'{pm_name} approved the CSAT feedback draft for "{project_name}" ({row.recipient_name}) — ready to send.',
+        message=f'{pm_name} approved the CSAT feedback draft for "{project_name}" ({recipient_name}) — ready to send.',
         link=f"{settings.FRONTEND_URL}/feedback",
     )
 
@@ -685,6 +741,44 @@ def get_public_survey(
 
     if not row:
         raise HTTPException(status_code=404, detail="No active survey found for this email.")
+    return {
+        "success": True,
+        "message": "Token verified successfully",
+        "token": data["token"]
+    }
+# ── Public survey endpoints (no auth) ──────────────────────────────────────────
+
+@router.get("/public/{token}")
+def get_survey_by_token(
+    token: str,
+    email: str = Query(..., description="Recipient email, must match the token's fact_feedback_request row."),
+    db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
+):
+    """Return full survey context for the customer-facing page, including the
+    PM's achievements (read-only, pre-filled) for 'Overview on Project
+    Performance'.
+
+    Requires the recipient's email as well as the token. SurveyAccessPage.tsx
+    already verifies email+token together via /verify-token before it
+    navigates here — but that was only a client-side redirect. Anyone who
+    obtained just the token (a plain 12-char string, easy to share/leak) could
+    previously open /survey/{token} directly and skip that check entirely,
+    since this endpoint only ever validated the token, never who was holding
+    it. Requiring the matching email here too closes that bypass at the only
+    layer that actually matters — the server."""
+    row = db.execute(
+        text("SELECT * FROM fact_feedback_request WHERE token = :token LIMIT 1"),
+        {"token": token},
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Invalid survey link.")
+    if row.recipient_email.strip().lower() != email.strip().lower():
+        # Deliberately the same generic message as "not found" — confirming
+        # a token exists but the email doesn't match would let someone
+        # enumerate/guess which email a given leaked token belongs to.
+        raise HTTPException(status_code=404, detail="Invalid survey link.")
     if row.status == "completed":
         raise HTTPException(status_code=409, detail="This feedback has already been submitted.")
     if row.expires_at and datetime.utcnow() > row.expires_at:
@@ -724,6 +818,30 @@ def submit_survey(body: SurveySubmitPayload, db: Session = Depends(get_local_db)
 
     if not req_row:
         raise HTTPException(status_code=404, detail="No active survey found for this email.")
+@router.post("/public/{token}/submit", status_code=status.HTTP_201_CREATED)
+def submit_survey(
+    token: str,
+    body: SurveySubmitPayload,
+    email: str = Query(..., description="Recipient email, must match the token's fact_feedback_request row."),
+    db: Session = Depends(get_local_db),
+):
+    """
+    Validate token AND recipient email, save the customer's full survey
+    response to fact_feedback_response.response_data, mark request completed.
+
+    Same email requirement as GET /public/{token} above, for the same
+    reason — a leaked/guessed token alone must not be enough to submit on
+    someone else's behalf.
+    """
+    req_row = db.execute(
+        text("SELECT id, status, expires_at, recipient_email FROM fact_feedback_request WHERE token = :token LIMIT 1"),
+        {"token": token},
+    ).fetchone()
+
+    if not req_row:
+        raise HTTPException(status_code=404, detail="Invalid survey link.")
+    if req_row.recipient_email.strip().lower() != email.strip().lower():
+        raise HTTPException(status_code=404, detail="Invalid survey link.")
     if req_row.status == "completed":
         raise HTTPException(status_code=409, detail="This feedback has already been submitted.")
     if req_row.expires_at and datetime.utcnow() > req_row.expires_at:

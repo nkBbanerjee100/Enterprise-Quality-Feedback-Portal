@@ -24,6 +24,15 @@ export function precedingHalf(year: number, half: Half): { year: number; half: H
   return half === 'H1' ? { year: year - 1, half: 'H2' } : { year, half: 'H1' };
 }
 
+// The half-year that opens immediately after the given one — e.g. once H1
+// 2026 is in use, the next creatable window is H2 2026; once H2 2026 is in
+// use (Oct 2026 – Mar 2027), the next is H1 2027. Mirrors halfDates' own
+// boundary math so "next window opens" always lines up with the actual date
+// the new half starts.
+export function nextHalf(year: number, half: Half): { year: number; half: Half } {
+  return half === 'H1' ? { year, half: 'H2' } : { year: year + 1, half: 'H1' };
+}
+
 export function halfDates(year: number, half: Half): [Date, Date] {
   if (half === 'H1') return [new Date(year, 3, 1), new Date(year, 8, 30, 23, 59, 59)];   // Apr 1 – Sep 30
   return [new Date(year, 9, 1), new Date(year + 1, 2, 31, 23, 59, 59)];                   // Oct 1 – Mar 31 (next year)

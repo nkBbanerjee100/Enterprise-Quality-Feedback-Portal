@@ -94,8 +94,26 @@ function ReviewRow({
   leaving: boolean;
 }) {
   const [remarks, setRemarks] = useState('');
-  const [showDecline, setShowDecline] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | null>(null);
   const meta = SOURCE_META[item.source];
+
+  const openReasonBox = (action: 'approve' | 'reject') => {
+    setRemarks('');
+    setPendingAction(action);
+  };
+
+  const handleClick = (action: 'approve' | 'reject') => {
+    // Both 'final' (Management's second-level exemption approval) and
+    // 'exemption' (Management deciding on Quality's direct exemption
+    // request) now require a reason either way — always show the box.
+    openReasonBox(action);
+  };
+
+  const confirm = () => {
+    if (!pendingAction || !remarks.trim()) return;
+    onDecide(item, pendingAction === 'approve', remarks);
+    setPendingAction(null);
+  };
 
   return (
     <div
@@ -126,50 +144,78 @@ function ReviewRow({
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <button
-            disabled={busy}
-            onClick={() => onDecide(item, true)}
-            style={{
-              fontSize: 12.5, fontWeight: 600, color: '#fff', background: BRAND.green,
-              border: 'none', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
-              opacity: busy ? 0.5 : 1,
-            }}
-          >
-            Approve
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => setShowDecline(s => !s)}
-            style={{
-              fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff',
-              border: '1px solid #E5E7EB', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
-              opacity: busy ? 0.5 : 1,
-            }}
-          >
-            Decline
-          </button>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexShrink: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <button
+              disabled={busy}
+              onClick={() => handleClick('reject')}
+              style={{
+                fontSize: 12.5, fontWeight: 600, color: '#fff', background: BRAND.green,
+                border: 'none', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.5 : 1, whiteSpace: 'nowrap',
+              }}
+            >
+              Reject Exemption
+            </button>
+            <span style={{ fontSize: 10, color: BRAND.textLight, textAlign: 'center', lineHeight: 1.3, maxWidth: 110 }}>
+              {item.action_type === 'exemption' ? 'sends back to the Manager' : 'sends back to the Manager to decide again'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <button
+              disabled={busy}
+              onClick={() => handleClick('approve')}
+              style={{
+                fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff',
+                border: '1px solid #E5E7EB', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.5 : 1, whiteSpace: 'nowrap',
+              }}
+            >
+              Approve Exemption
+            </button>
+            <span style={{ fontSize: 10, color: BRAND.textLight, textAlign: 'center', lineHeight: 1.3, maxWidth: 110 }}>
+              final · removes from cycle
+            </span>
+          </div>
         </div>
       </div>
 
-      {showDecline && (
+      {item.exemption_reason && (
+        <p style={{ fontSize: 12, color: BRAND.textLight, margin: '8px 0 0 50px', background: '#FAFAFA', borderRadius: 8, padding: '6px 10px' }}>
+          Reason: "{item.exemption_reason}"
+        </p>
+      )}
+
+      {pendingAction && (
         <div style={{ marginTop: 10, marginLeft: 50, display: 'flex', gap: 8 }}>
           <input
             type="text"
+            autoFocus
             value={remarks}
             onChange={e => setRemarks(e.target.value)}
-            placeholder="Reason (optional)"
+            placeholder="Reason (required)"
             style={{ flex: 1, fontSize: 13, padding: '8px 10px', border: '1px solid #E5E7EB', borderRadius: 8 }}
           />
           <button
-            disabled={busy}
-            onClick={() => onDecide(item, false, remarks || undefined)}
+            disabled={busy || !remarks.trim()}
+            onClick={confirm}
             style={{
-              fontSize: 12.5, fontWeight: 600, color: '#B91C1C', background: '#FEF2F2',
-              border: '1px solid #FCA5A5', borderRadius: 8, padding: '7px 14px', cursor: busy ? 'not-allowed' : 'pointer',
+              fontSize: 12.5, fontWeight: 600,
+              color: pendingAction === 'approve' ? '#B91C1C' : '#166534',
+              background: pendingAction === 'approve' ? '#FEF2F2' : '#F0FDF4',
+              border: `1px solid ${pendingAction === 'approve' ? '#FCA5A5' : '#86EFAC'}`,
+              borderRadius: 8, padding: '7px 14px',
+              cursor: (busy || !remarks.trim()) ? 'not-allowed' : 'pointer',
+              opacity: (busy || !remarks.trim()) ? 0.5 : 1,
             }}
           >
-            Confirm Decline
+            {pendingAction === 'approve' ? 'Confirm Exemption' : 'Confirm Rejection'}
+          </button>
+          <button
+            onClick={() => setPendingAction(null)}
+            style={{ fontSize: 12.5, fontWeight: 600, color: BRAND.textMid, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '7px 14px', cursor: 'pointer' }}
+          >
+            Cancel
           </button>
         </div>
       )}
@@ -196,13 +242,29 @@ export const PendingReviewsPage: React.FC = () => {
 
   const handleDecide = async (item: PendingReviewItem, approve: boolean, remarks?: string) => {
     const key = `${item.source}:${item.id}`;
+
+    // Both 'final' (Management's second-level exemption approval) and
+    // 'exemption' (Management deciding on Quality's direct exemption
+    // request) now require a reason either way — approving/rejecting
+    // either kind needs one.
+    if (!(remarks || '').trim()) {
+      setErrorMsg('A reason is required, whether approving or rejecting the exemption.');
+      return;
+    }
+
     setBusyId(key);
     setErrorMsg(null);
     try {
-      if (item.source === 'staging') {
+      if (item.action_type === 'exemption') {
+        if (item.source === 'staging') {
+          await projectStagingApi.decideExemption(item.id, approve, remarks);
+        } else {
+          await csatCyclesApi.decideExemption(item.cycle_id!, item.id, approve, remarks);
+        }
+      } else if (item.source === 'staging') {
         await projectStagingApi.decide(item.id, approve, remarks);
       } else if (approve) {
-        await csatCyclesApi.approveAddition(item.cycle_id!, item.id);
+        await csatCyclesApi.approveAddition(item.cycle_id!, item.id, { remarks });
       } else {
         await csatCyclesApi.declineAddition(item.cycle_id!, item.id, { remarks });
       }

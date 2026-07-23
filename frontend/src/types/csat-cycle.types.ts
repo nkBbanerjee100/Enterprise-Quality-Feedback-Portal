@@ -18,9 +18,18 @@ export type EligibilityStatus =
 export type CycleHalf = 'H1' | 'H2';
 
 // Separate from EligibilityStatus — gates the act of adding a project to a
-// cycle at all. Set when Quality/Management enrolls a project; Management
-// or that project's Manager (PM) must approve/decline it.
-export type AdditionApprovalStatus = 'pending' | 'approved' | 'declined';
+// cycle at all. Mirrors the exact Quality -> Manager -> Quality ->
+// Management chain as the pre-cycle staging pool (see
+// project-staging.types.ts's StagingStatus — same literal values for the
+// four pending states by design).
+export type AdditionApprovalStatus =
+  | 'pending_management_exemption_review'
+  | 'pending_manager_review'
+  | 'pending_quality_recheck'
+  | 'pending_management_review'
+  | 'approved'
+  | 'declined'
+  | 'pending';   // legacy — no longer set by new code
 
 export interface EnrolledProject {
   enrollment_id: number;
@@ -31,6 +40,8 @@ export interface EnrolledProject {
   eligibility_status: EligibilityStatus;
   exemption_reason?: string;
   notes?: string;
+  enrolled_by?: string;
+  enrolled_by_name?: string;
   enrolled_at: string;
   approval_requested_at?: string;
   manager_remarks?: string;
@@ -39,11 +50,22 @@ export interface EnrolledProject {
   // ── Addition-approval (separate from the exemption flow above) ─────────
   addition_approval_status: AdditionApprovalStatus;
   addition_approved_by?: string;
+  addition_approved_by_name?: string;
   addition_approved_at?: string;
   addition_decision_remarks?: string;
   project_manager_emp_id?: string;
   project_manager_name?: string;
   can_approve_addition: boolean;   // computed server-side for the current user
+
+  // ── Chain tracking — mirrors project-staging.types.ts's StagedProject ──
+  manager_emp_id?: string;
+  manager_decided_by?: string;
+  manager_decided_by_name?: string;
+  manager_decided_at?: string;
+  quality_recheck_by?: string;
+  quality_recheck_by_name?: string;
+  quality_recheck_at?: string;
+  conflict_note?: string | null;
 
   // ── Feedback Request Status ──────────────────────────────────────────────
   feedback_request_id?: number | null;
@@ -64,8 +86,21 @@ export interface CycleProjectsResponse {
   ready_count: number;   // eligible/approved AND addition itself confirmed — matches getRowStatus()'s "Ready" bucket
 }
 
+export type EnrollTriageAction = 'eligible' | 'exempted';
+
+export interface EnrollProjectItem {
+  tms_project_id: number;
+  action: EnrollTriageAction;
+  exemption_reason?: string;   // required when action === 'exempted'
+}
+
 export interface EnrollProjectsRequest {
-  tms_project_ids: number[];  // TMS tsms_projects.Id values
+  // Modern per-project eligible/exempt form (mirrors project-staging's
+  // /select) — use this for Quality/Management triage.
+  items?: EnrollProjectItem[];
+  // Legacy all-eligible shorthand — still used for a Manager adding their
+  // own project directly (auto-approved, no triage decision needed).
+  tms_project_ids?: number[];
 }
 
 export interface SetEligibilityRequest {
@@ -101,3 +136,31 @@ export const ADDITION_APPROVAL_COLORS: Record<AdditionApprovalStatus, { bg: stri
   approved: { bg: '#D1FAE5', text: '#065F46', border: '#34D399' },
   declined: { bg: '#FEE2E2', text: '#991B1B', border: '#F87171' },
 };
+// ─── Audit Report ────────────────────────────────────────────────────────────
+// Every project in a cycle — added AND exempted — with its final outcome and
+// a full chronological reason trail, sourced from audit_logs rather than a
+// new table (see GET /{cycle_id}/audit-report).
+export interface AuditTimelineEntry {
+  at: string;
+  actor_name: string | null;
+  actor_role: string | null;
+  action: string;
+  reason: string | null;
+}
+ 
+export interface AuditReportProject {
+  project_id: number;
+  project_name: string;
+  final_status: 'added' | 'exempted';
+  current_reason: string | null;
+  timeline: AuditTimelineEntry[];
+}
+ 
+export interface AuditReportResponse {
+  cycle_id: number;
+  cycle_name: string;
+  total: number;
+  added: number;
+  exempted: number;
+  projects: AuditReportProject[];
+}

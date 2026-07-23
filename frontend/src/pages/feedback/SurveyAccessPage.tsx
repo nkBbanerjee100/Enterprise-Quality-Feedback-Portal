@@ -47,6 +47,38 @@ export const SurveyAccessPage = () => {
     if (cooldownSeconds <= 0) {
       return;
     }
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+
+
+const [error,setError] = useState("");
+
+
+
+const verify = async()=>{
+
+    try{
+
+        const result = await verifySurveyToken({
+            email,
+            token
+        });
+
+
+        console.log(
+            "VERIFY RESPONSE",
+            result
+        );
+
+
+        if(result.success || result.valid){
+
+            navigate(
+                `/survey/${token}?email=${encodeURIComponent(email)}`
+            );
+
+        }
+        else{
 
     const timer = window.setInterval(() => {
       setCooldownSeconds((value) => Math.max(value - 1, 0));
@@ -197,4 +229,5 @@ export const SurveyAccessPage = () => {
       </div>
     </div>
   );
+};
 };

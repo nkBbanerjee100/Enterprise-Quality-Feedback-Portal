@@ -515,7 +515,6 @@ const StatusSection: React.FC = () => {
     { label: 'Submitted',     bg: '#E8F2EC', color: G,        desc: 'Customer filled and submitted the form' },
     // { label: 'Reminder Sent', bg: '#EEF4FF', color: '#2563EB', desc: 'Follow-up email sent after no response' },
     { label: 'Expired',       bg: '#FEF2F2', color: '#DC2626', desc: 'Link expired — can be resent' },
-    { label: 'Cancelled',     bg: '#F5F5F5', color: '#888',    desc: 'Feedback request was manually cancelled' },
   ];
 
   return (

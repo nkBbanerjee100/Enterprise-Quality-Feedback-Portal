@@ -8,9 +8,11 @@
 import { api } from './client';
 
 export type PendingReviewSource = 'staging' | 'cycle_addition';
+export type PendingReviewActionType = 'exemption' | 'final';
 
 export interface PendingReviewItem {
   source:         PendingReviewSource;
+  action_type:    PendingReviewActionType;
   id:             number;          // staging_id (staging) or enrollment_id (cycle_addition)
   cycle_id:       number | null;
   cycle_name:     string | null;
@@ -20,6 +22,7 @@ export interface PendingReviewItem {
   is_active:      boolean;
   requested_by:   string | null;
   requested_at:   string;
+  exemption_reason: string | null;
 }
 
 export interface PendingReviewsResponse {
