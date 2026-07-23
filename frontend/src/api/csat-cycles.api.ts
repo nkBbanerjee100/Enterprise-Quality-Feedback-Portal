@@ -103,6 +103,21 @@ export const csatCyclesApi = {
     return r.data;
   },
 
+  managerDecision: async (
+    cycleId: number,
+    enrollmentId: number,
+    payload: {
+      decision: 'approved' | 'declined';
+      manager_remarks?: string;
+    },
+  ): Promise<EnrolledProject> => {
+    if (payload.decision === 'approved') {
+      return csatCyclesApi.approveAddition(cycleId, enrollmentId);
+    }
+
+    return csatCyclesApi.declineAddition(cycleId, enrollmentId, {
+      remarks: payload.manager_remarks,
+    });
   /** The project's own Manager reviewing an enrollment sitting in
    * pending_manager_review. exempted requires a reason and sends it back
    * to Quality to recheck; eligible is final. */
@@ -139,6 +154,7 @@ export const csatCyclesApi = {
   removeProject: async (cycleId: number, enrollmentId: number): Promise<void> => {
     await api.delete(`/api/csat-cycles/${cycleId}/projects/${enrollmentId}`);
   },
+};
 
   /** Every project in this cycle — added AND exempted — each with its
    * final outcome and a full chronological reason trail (who decided

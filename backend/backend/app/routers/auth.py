@@ -25,6 +25,8 @@ from app.core.dependencies import get_current_user, require_role
 from app.services.audit_service import log_action, get_client_ip
 from app.schemas.audit import AuditActions
 from app.schemas.password_reset import ForgotPasswordRequest, ResetPasswordRequest, ChangePasswordRequest
+from app.schemas.customer_otp import SendOtpRequest, SendOtpResponse, VerifyOtpRequest, VerifyOtpResponse
+from app.services.otp_service import generate_otp, hash_otp, verify_otp_hash
 from app.utils.email import EmailSender
 from app.config import settings
 import hashlib
@@ -273,13 +275,79 @@ _ROLE_CONFIG: dict = {
         ],
         "defaultRoute": "/reports",
     },
-    # Customer → survey links are public/token-based, no portal login needed
+    # Customer survey access is handled by the OTP flow, no portal login needed
     # If they somehow land here, send to unauthorized
     "CUSTOMER": {
         "permissions": ["SUBMIT_FEEDBACK"],
         "defaultRoute": "/unauthorized",
     },
 }
+
+
+OTP_EXPIRY_MINUTES = 5
+OTP_RESEND_COOLDOWN_SECONDS = 60
+MAX_OTP_ATTEMPTS = 5
+_survey_otp_attempts: dict[str, int] = {}
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _get_customer_allowlist_row(local_db: Session, email: str):
+    return local_db.execute(
+        text("""
+            SELECT Email, role
+            FROM csat_allowed_users
+            WHERE LOWER(Email) = LOWER(:email)
+            LIMIT 1
+        """),
+        {"email": email},
+    ).fetchone()
+
+
+def _get_latest_customer_otp(local_db: Session, email: str):
+    return local_db.execute(
+        text("""
+            SELECT id, email, otp_hash, expires_at, verified, created_at
+            FROM customer_otp
+            WHERE LOWER(email) = LOWER(:email)
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        """),
+        {"email": email},
+    ).fetchone()
+
+
+def _customer_survey_email_body(otp: str) -> tuple[str, str]:
+    body = (
+        "Hello,\n\n"
+        "Your verification code is:\n\n"
+        f"{otp}\n\n"
+        "This OTP expires in 5 minutes.\n\n"
+        "Do not share this code."
+    )
+    html = f"""<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:0;background:#f9fafb;font-family:Segoe UI,Arial,sans-serif;color:#111827;">
+    <div style="max-width:560px;margin:40px auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+      <div style="background:#16a34a;padding:28px 32px;">
+        <p style="margin:0;font-size:11px;font-weight:700;color:#bbf7d0;letter-spacing:0.1em;text-transform:uppercase;">Mindteck · Quality Feedback Platform</p>
+        <h1 style="margin:8px 0 0;font-size:22px;color:#ffffff;font-weight:700;">CSAT Verification Code</h1>
+      </div>
+      <div style="padding:28px 32px;">
+        <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">Hello,</p>
+        <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">Your verification code is:</p>
+        <div style="text-align:center;margin:20px 0;padding:16px;background:#f0fdf4;border-radius:8px;">
+          <h2 style="margin:0;font-size:28px;color:#16a34a;letter-spacing:6px;">{otp}</h2>
+        </div>
+        <p style="font-size:14px;line-height:1.6;margin:0 0 8px;">This OTP expires in 5 minutes.</p>
+        <p style="font-size:14px;line-height:1.6;margin:0;">Do not share this code.</p>
+      </div>
+    </div>
+  </body>
+</html>"""
+    return body, html
  
  
 # ============================================================
@@ -631,6 +699,124 @@ async def get_me(
         permissions=config["permissions"],
         defaultRoute=config["defaultRoute"],
     )
+
+
+# ============================================================
+# POST /api/auth/send-otp
+# ============================================================
+@router.post(
+    "/send-otp",
+    response_model=SendOtpResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Send a verification OTP to an approved customer",
+)
+async def send_survey_otp(
+    payload: SendOtpRequest,
+    local_db: Session = Depends(get_local_db),
+):
+    email = _normalize_email(payload.email)
+    allowed_row = _get_customer_allowlist_row(local_db, email)
+
+    if allowed_row is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized email.")
+
+    latest_row = _get_latest_customer_otp(local_db, email)
+    if latest_row and latest_row.created_at:
+        if datetime.utcnow() - latest_row.created_at < timedelta(seconds=OTP_RESEND_COOLDOWN_SECONDS):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Please wait 60 seconds before requesting another OTP.",
+            )
+
+    otp = generate_otp()
+    otp_hash = hash_otp(otp)
+    expires_at = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+    now = datetime.utcnow()
+
+    local_db.execute(
+        text("""
+            INSERT INTO customer_otp (email, otp_hash, expires_at, verified, created_at)
+            VALUES (:email, :otp_hash, :expires_at, 0, :created_at)
+        """),
+        {
+            "email": email,
+            "otp_hash": otp_hash,
+            "expires_at": expires_at,
+            "created_at": now,
+        },
+    )
+
+    subject = "CSAT Verification Code"
+    body, html = _customer_survey_email_body(otp)
+    email_sent = EmailSender.send_email(
+        to=email,
+        subject=subject,
+        body=body,
+        html_content=html,
+    )
+
+    if not email_sent:
+        local_db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP email.")
+
+    local_db.commit()
+    _survey_otp_attempts.pop(email, None)
+
+    return SendOtpResponse(message="OTP sent successfully")
+
+
+# ============================================================
+# POST /api/auth/verify-otp
+# ============================================================
+@router.post(
+    "/verify-otp",
+    response_model=VerifyOtpResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Verify a customer survey OTP",
+)
+async def verify_survey_otp(
+    payload: VerifyOtpRequest,
+    local_db: Session = Depends(get_local_db),
+):
+    email = _normalize_email(payload.email)
+    otp_value = payload.otp.strip()
+
+    allowed_row = _get_customer_allowlist_row(local_db, email)
+    if allowed_row is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized email.")
+
+    otp_row = _get_latest_customer_otp(local_db, email)
+    if otp_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Please request an OTP first.")
+    if otp_row.verified:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="OTP already used.")
+    if otp_row.expires_at and datetime.utcnow() > otp_row.expires_at:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Expired OTP.")
+
+    failed_attempts = _survey_otp_attempts.get(email, 0)
+    if failed_attempts >= MAX_OTP_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many incorrect attempts. Request a new OTP.",
+        )
+
+    if not verify_otp_hash(otp_value, otp_row.otp_hash):
+        _survey_otp_attempts[email] = failed_attempts + 1
+        if _survey_otp_attempts[email] >= MAX_OTP_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many incorrect attempts. Request a new OTP.",
+            )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP.")
+
+    local_db.execute(
+        text("UPDATE customer_otp SET verified = 1 WHERE id = :id"),
+        {"id": otp_row.id},
+    )
+    local_db.commit()
+    _survey_otp_attempts.pop(email, None)
+
+    return VerifyOtpResponse(verified=True)
 
 
 # ============================================================

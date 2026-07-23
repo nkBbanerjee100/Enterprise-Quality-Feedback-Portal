@@ -1,10 +1,11 @@
 /**
 * Customer Survey Page
 *
-* Accessible via public route /survey/:token (no auth required)
-* Completely redesigned based on the provided mockup.
-*/
+ * Accessible via public route /survey?email=... (no auth required after OTP verification)
+ * Completely redesigned based on the provided mockup.
+ */
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useParams, useSearchParams } from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -98,6 +99,8 @@ const LockIcon = () => (
 );
 
 export const CustomerSurveyPage: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const email = searchParams.get('email')?.trim().toLowerCase() || '';
   const { token } = useParams<{ token: string }>();
   const [searchParams] = useSearchParams();
   const email = searchParams.get('email') || '';
@@ -127,8 +130,9 @@ export const CustomerSurveyPage: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
-  // ── Validate token on mount ──────────────────────────────────────────────
+  // Load the survey after OTP verification using the verified email from the URL.
   useEffect(() => {
+    if (!email) {
     if (!token || !email) {
       // A direct link needs BOTH — landing here with just a token (no
       // ?email=) means SurveyAccessPage's verification step was skipped
@@ -139,6 +143,7 @@ export const CustomerSurveyPage: React.FC = () => {
       return;
     }
 
+    fetch(`${API_BASE}/api/feedback/public?email=${encodeURIComponent(email)}`)
     fetch(`${API_BASE}/api/feedback/public/${token}?email=${encodeURIComponent(email)}`)
       .then(async res => {
         if (res.status === 404) { setStep('error'); return; }
@@ -155,6 +160,7 @@ export const CustomerSurveyPage: React.FC = () => {
         setProjectNameDisplay(`${data.projectName || `Project #${data.projectId}`} / ${pCode}`);
       })
       .catch(() => setStep('error'));
+  }, [email]);
   }, [token, email]);
 
   // ── Auto-calculate Overall Rating ──────────────────────────────────────
@@ -238,6 +244,7 @@ export const CustomerSurveyPage: React.FC = () => {
   };
 
   const handleSubmit = async () => {
+    if (!validate() || !email) return;
     if (!validate() || !token || !email) return;
     setSubmitting(true);
     try {
@@ -258,10 +265,11 @@ export const CustomerSurveyPage: React.FC = () => {
         signature
       };
 
+      const res = await fetch(`${API_BASE}/api/feedback/public/submit`, {
       const res = await fetch(`${API_BASE}/api/feedback/public/${token}/submit?email=${encodeURIComponent(email)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: payloadData }),
+        body: JSON.stringify({ email, data: payloadData }),
       });
       if (res.status === 409) { setStep('already_submitted'); return; }
       if (res.status === 410) { setStep('expired'); return; }
@@ -670,3 +678,4 @@ export const CustomerSurveyPage: React.FC = () => {
     </div>
   );
 };
+

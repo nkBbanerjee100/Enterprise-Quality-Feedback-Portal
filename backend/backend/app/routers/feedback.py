@@ -14,11 +14,8 @@ Lifecycle of a feedback request (fact_feedback_request):
   4. Once approved, Quality confirms the actual send
      (POST /requests/{id}/send-to-customer) — only now is the customer
      actually emailed a survey link. The PM's achievements are carried into
-     the customer-facing survey (GET /public/{token}) as a read-only field.
+     the customer-facing survey (GET /public?email=...) as a read-only field.
 """
-import hmac
-import hashlib
-import base64
 import json
 import time
 import string
@@ -26,10 +23,18 @@ import secrets
 import re
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, status, Depends, Query
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
+
 from app.services.audit_service import log_action, get_client_ip
 from app.schemas.audit import AuditActions
+from app.schemas.feedback import (
+    FeedbackRequestPayload,
+    EditDraftPayload,
+    PMApprovePayload,
+    PMRejectPayload,
+    SurveySubmitPayload,
+)
+
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.orm import Session
@@ -41,29 +46,17 @@ from app.database import get_local_db, get_tms_db
 from app.core.dependencies import get_current_user, require_role
 from app.models.notification import Notification
 from app.services.cycle_notification_service import get_project_manager
-
 router = APIRouter()
 
-# Token expires in 30 days
 TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 
-
-# ── Schemas ────────────────────────────────────────────────────────────────────
-
 class FeedbackRequestPayload(BaseModel):
-    projectId:           int
-    recipientEmail:      str
-    recipientName:       str
-    csatCycleId:         Optional[int] = None
-    message:             Optional[str] = None    # personal note, carried through to the eventual email
-    cc:                  Optional[List[str]] = None
-    periodOfPerformance: Optional[str] = None
-
-
-class EditDraftPayload(BaseModel):
-    projectId:           int
-    recipientName:       str
-    recipientEmail:      str
+    projectId: int
+    recipientEmail: str
+    recipientName: str
+    csatCycleId: Optional[int] = None
+    message: Optional[str] = None
+    cc: Optional[List[str]] = None
     periodOfPerformance: Optional[str] = None
     message:             Optional[str] = None
 
@@ -107,19 +100,13 @@ def _create_survey_token(project_id: int, recipient_email: str) -> str:
 
 def _hash_token(token: str) -> str:
 
-    return hashlib.sha256(
-        token.encode()
-    ).hexdigest()
-
-
-# ── Email builders ─────────────────────────────────────────────────────────────
+# ?????? Email builders ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? ─────────────────────────────────────────────────────────────
 
 def _build_email_html(
     recipient_name: str,
     project_name: str,
     survey_link: str,
     personal_message: Optional[str],
-    token: str
 ) -> str:
     personal_block = ""
     if personal_message and personal_message.strip():
@@ -164,23 +151,8 @@ def _build_email_html(
 
 
       <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 24px;">
-        Please take a moment to <strong>submit your feedback</strong> using the button below.
+        Please open the survey access page and verify your email to receive your one-time OTP.
       </p>
-
-
-      <!-- Verification Token Added -->
-      <div style="text-align:center;margin:20px 0;padding:15px;background:#f0fdf4;border-radius:8px;">
-
-        <p style="font-size:14px;color:#374151;margin:0 0 8px;">
-          Your verification token:
-        </p>
-
-        <h2 style="margin:0;font-size:24px;color:#16a34a;letter-spacing:4px;">
-          {token}
-        </h2>
-
-      </div>
-      <!-- End Verification Token -->
 
 
       <div style="text-align:center;margin:28px 0;">
@@ -188,7 +160,7 @@ def _build_email_html(
         <a href="{survey_link}" 
            style="display:inline-block;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
 
-          📋 Submit Your Feedback
+          Open Survey Access
 
         </a>
 
@@ -207,7 +179,7 @@ def _build_email_html(
 
       <p style="font-size:12px;color:#6b7280;margin:16px 0 0;">
 
-        This link will expire in <strong>30 days</strong>.
+        You will receive a verification code after confirming your email address.
 
       </p>
 
@@ -235,7 +207,6 @@ def _build_email_text(
     project_name: str,
     survey_link: str,
     personal_message: Optional[str],
-    token: str,
 ) -> str:
 
     lines = [
@@ -252,13 +223,12 @@ def _build_email_text(
         ]
 
     lines += [
-        "Your verification token:",
-        token,
+        "Please open the survey access page and verify your email to receive your one-time OTP.",
         "",
-        "Submit your feedback here:",
+        "Survey access page:",
         survey_link,
         "",
-        "This link expires in 30 days.",
+        "You will receive a verification code after confirming your email address.",
         "",
         "© 2026 CSAT Tool · Mindteck",
     ]
@@ -332,6 +302,34 @@ def _project_name(project_id: int, tms_db: Session) -> str:
     return row.Name if row else f"Project #{project_id}"
 
 
+def _has_verified_customer_access(email: str, db: Session) -> bool:
+    row = db.execute(
+        text("""
+            SELECT id
+            FROM customer_otp
+            WHERE LOWER(email) = LOWER(:email)
+              AND verified = 1
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        """),
+        {"email": email},
+    ).fetchone()
+    return row is not None
+
+
+def _get_survey_request_by_email(email: str, db: Session):
+    return db.execute(
+        text("""
+            SELECT *
+            FROM fact_feedback_request
+            WHERE LOWER(recipient_email) = LOWER(:email)
+            ORDER BY COALESCE(request_sent_at, created_at) DESC, id DESC
+            LIMIT 1
+        """),
+        {"email": email},
+    ).fetchone()
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("/requests")
@@ -356,7 +354,7 @@ def list_feedback_requests(
         text("""
             SELECT
                 fr.id, fr.csat_cycle_id, fr.project_id, fr.recipient_email,
-                fr.recipient_name, fr.cc_emails, fr.feedback_url, fr.token,
+                fr.recipient_name, fr.cc_emails, fr.feedback_url,
                 fr.expires_at, fr.request_sent_at, fr.reminder_sent_at,
                 fr.status, fr.created_at, fr.period_of_performance,
                 fr.pm_achievements, fr.pm_approval_status, fr.pm_rejection_comments
@@ -652,17 +650,10 @@ def send_to_customer(
             detail="This request has already been sent."
         )
 
-    token = _create_survey_token(
-    row.project_id,
-    row.recipient_email
-    )
-
     project_name = _project_name(row.project_id, tms_db)
 
     survey_link = (
         f"{settings.FRONTEND_URL}/survey-access"
-        f"?email={row.recipient_email}"
-        f"&surveyToken={token}"
     )
     now = datetime.utcnow()
 
@@ -684,14 +675,12 @@ def send_to_customer(
             project_name,
             survey_link,
             row.message,
-            token
         ),
         html_content=_build_email_html(
             row.recipient_name,
             project_name,
             survey_link,
             row.message,
-            token
         ),
         cc=cc_list,
     )
@@ -705,15 +694,13 @@ def send_to_customer(
     db.execute(
         text("""
             UPDATE fact_feedback_request
-            SET token = :token,
-                feedback_url = :url,
+            SET feedback_url = :url,
                 expires_at = :expires_at,
                 request_sent_at = :sent_at,
                 status = 'sent'
             WHERE id = :id
         """),
         {
-            "token": token,
             "url": survey_link,
             "expires_at": expires_at,
             "sent_at": now,
@@ -738,69 +725,22 @@ def send_to_customer(
         "message": "Feedback request email successfully sent."
     }
     
-class VerifyTokenRequest(BaseModel):
-    email: str
-    token: str
-
-
-@router.post("/verify-token")
-def verify_survey_token(
-    payload: VerifyTokenRequest,
+@router.get("/public")
+def get_public_survey(
+    email: str = Query(...),
     db: Session = Depends(get_local_db),
+    tms_db: Session = Depends(get_tms_db),
 ):
+    """Return survey context for the OTP-verified customer-facing page."""
+    normalized_email = email.strip().lower()
 
-    print("========== TOKEN VERIFY DEBUG ==========")
-    print("Email received:", payload.email)
-    print("Token received:", payload.token)
-    print("========================================")
+    if not _has_verified_customer_access(normalized_email, db):
+        raise HTTPException(status_code=403, detail="Unauthorized email.")
 
-    row = db.execute(
-        text("""
-            SELECT
-                token,
-                recipient_email,
-                expires_at,
-                status
-            FROM fact_feedback_request
-            WHERE token = :token
-            LIMIT 1
-        """),
-        {
-            "token": payload.token.strip()
-        },
-    ).fetchone()
+    row = _get_survey_request_by_email(normalized_email, db)
 
     if not row:
-        print("TOKEN NOT FOUND IN DATABASE")
-        raise HTTPException(
-            status_code=404,
-            detail="Invalid email or token"
-        )
-
-    data = row._mapping
-
-    print("DB Email:", data["recipient_email"])
-    print("DB Token:", data["token"])
-
-    if data["recipient_email"].strip().lower() != payload.email.strip().lower():
-        print("EMAIL MISMATCH")
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid email or token"
-        )
-
-    if data["status"] == "completed":
-        raise HTTPException(
-            status_code=400,
-            detail="Survey already submitted"
-        )
-
-    if data["expires_at"] and datetime.utcnow() > data["expires_at"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Token expired"
-        )
-
+        raise HTTPException(status_code=404, detail="No active survey found for this email.")
     return {
         "success": True,
         "message": "Token verified successfully",
@@ -863,6 +803,21 @@ def get_survey_by_token(
     }
 
 
+@router.post("/public/submit", status_code=status.HTTP_201_CREATED)
+def submit_survey(body: SurveySubmitPayload, db: Session = Depends(get_local_db)):
+    """
+    Save the customer's full survey response to
+    fact_feedback_response.response_data and mark the request completed.
+    """
+    normalized_email = body.email.strip().lower()
+
+    if not _has_verified_customer_access(normalized_email, db):
+        raise HTTPException(status_code=403, detail="Unauthorized email.")
+
+    req_row = _get_survey_request_by_email(normalized_email, db)
+
+    if not req_row:
+        raise HTTPException(status_code=404, detail="No active survey found for this email.")
 @router.post("/public/{token}/submit", status_code=status.HTTP_201_CREATED)
 def submit_survey(
     token: str,
@@ -999,3 +954,7 @@ def get_request_responses(
         # (data.answers?.[0]?.submittedAt) keeps working without a frontend change.
         "answers": [{"submittedAt": r["submittedAt"]} for r in responses],
     }
+
+
+
+

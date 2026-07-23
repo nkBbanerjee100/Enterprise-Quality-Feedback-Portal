@@ -54,7 +54,7 @@ export const ROUTES = {
   FEEDBACK:           '/feedback',
   FEEDBACK_SEND:      '/feedback/send',
   FEEDBACK_DETAIL:    '/feedback/:id',
-  SURVEY:             '/survey/:token',
+  SURVEY:             '/survey',
   ACTION_PLANS:       '/action-plans',
   ACTION_PLAN_DETAIL: '/action-plans/:id',
   CSAT_CYCLES:        '/csat-cycles',
