@@ -11,6 +11,7 @@ import { csatCyclesApi } from '../../api/csat-cycles.api';
 import { formatDate } from '../../utils/formatters';
 import { useAuthStore } from '../../store/auth.store';
 import { UserRole } from '../../types/auth.types';
+import { DatePicker } from '../../components/common/DatePicker';
 
 const BRAND = { green: '#1A5C3A', gold: '#9B7C2A' };
 
@@ -48,8 +49,8 @@ function CreateCycleModal({ onClose, onCreated }: { onClose: () => void; onCreat
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-        <div style={{ background: BRAND.green }} className="px-6 py-4 flex justify-between items-center">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div style={{ background: BRAND.green }} className="px-6 py-4 flex justify-between items-center rounded-t-2xl">
           <h3 className="text-white font-bold">Create CSAT Cycle</h3>
           <button onClick={onClose} className="text-white/70 hover:text-white text-xl leading-none">×</button>
         </div>
@@ -70,24 +71,22 @@ function CreateCycleModal({ onClose, onCreated }: { onClose: () => void; onCreat
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Start Date</label>
-              <input
-                type="date"
+              <DatePicker
                 value={startDate}
                 min={minDate}
                 max={maxDate}
-                onChange={e => setStartDate(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                onChange={setStartDate}
+                placeholder="Pick a date"
               />
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">End Date</label>
-              <input
-                type="date"
+              <DatePicker
                 value={endDate}
                 min={startDate || minDate}
                 max={maxDate}
-                onChange={e => setEndDate(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                onChange={setEndDate}
+                placeholder="Pick a date"
               />
             </div>
           </div>
@@ -103,7 +102,7 @@ function CreateCycleModal({ onClose, onCreated }: { onClose: () => void; onCreat
           )}
         </div>
 
-        <div className="px-6 pb-5 flex justify-end gap-3">
+        <div className="px-6 pb-5 flex justify-end gap-3 rounded-b-2xl">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
             Cancel
           </button>
