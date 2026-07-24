@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.security import get_security_headers
+from app.config import settings
 from app.routers import auth, users, csat_cycles, projects, feedback, dashboard, reports, tms_sync, notifications, project_staging, reviews, audit
 
 
@@ -29,7 +30,7 @@ def create_app() -> FastAPI:
     # Middleware - CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://localhost:5173"],
+        allow_origins=settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

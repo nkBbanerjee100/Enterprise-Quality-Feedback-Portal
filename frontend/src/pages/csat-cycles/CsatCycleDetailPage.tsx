@@ -166,12 +166,11 @@ function EnrollModal({
   });
   const yearOptions = Array.from({ length: 11 }, (_, i) => new Date().getFullYear() - i);
 
-  const { activeProjects, completedProjects } = useMemo(() => {
+  const { activeProjects, completedProjects, selectedByProjectId } = useMemo(() => {
     const projects = (data as any)?.projects ?? [];
-    const selectedProjectIds = new Set(selectedProjects.map(project => project.tmsProjectId));
+    const selectedByProjectId = new Map(selectedProjects.map(project => [project.tmsProjectId, project]));
     const available = projects.filter((p: any) =>
       !enrolledIds.has(p.project_id) &&
-      !selectedProjectIds.has(Number(p.project_id)) &&
       (search === '' || p.project_name.toLowerCase().includes(search.toLowerCase())) &&
       (isManagerRole || pmFilter === '' || p.project_manager_emp_id === pmFilter) &&
       (yearFilter === '' || (p.start_date && new Date(p.start_date).getFullYear() === Number(yearFilter)))
@@ -200,7 +199,7 @@ function EnrollModal({
     }
     active.sort((a, b) => a.project_name.localeCompare(b.project_name));
     completed.sort((a, b) => a.project_name.localeCompare(b.project_name));
-    return { activeProjects: active, completedProjects: completed };
+    return { activeProjects: active, completedProjects: completed, selectedByProjectId };
   }, [data, enrolledIds, selectedProjects, search, pmFilter, yearFilter, isManagerRole, user?.emp_id, cycleStartDate, cycleEndDate]);
 
   const totalFiltered = activeProjects.length + completedProjects.length;
@@ -323,35 +322,6 @@ function EnrollModal({
                 ✕ {selectedProjects.filter(project => project.action === 'exempted').length} To Exempt
               </span>
             </div>
-
-            {selectedProjects.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {selectedProjects.map(project => (
-                  <span
-                    key={project.tmsProjectId}
-                    className={`inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium border ${
-                      project.action === 'eligible'
-                        ? 'bg-green-50 text-green-700 border-green-200'
-                        : 'bg-orange-50 text-orange-700 border-orange-200'
-                    }`}
-                    title={project.action === 'exempted' && project.exemptionReason ? `Reason: ${project.exemptionReason}` : undefined}
-                  >
-                    {project.action === 'eligible' ? '✓' : '✕'} {project.projectName}
-                    <button
-                      type="button"
-                      onClick={() => removeSelectedProject(project.tmsProjectId)}
-                      disabled={submitting}
-                      className={`rounded-full w-4 h-4 flex items-center justify-center leading-none hover:bg-black/10 ${
-                        project.action === 'eligible' ? 'text-green-700' : 'text-orange-700'
-                      }`}
-                      aria-label={`Remove ${project.projectName}`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
         </div>
 
@@ -383,37 +353,67 @@ function EnrollModal({
                       Active Projects ({activeProjects.length})
                     </span>
                   </div>
-                  {activeProjects.map((p: any) => (
-                    <div key={p.project_id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent">
+                  {activeProjects.map((p: any) => {
+                    const selection = selectedByProjectId.get(Number(p.project_id));
+                    return (
+                    <div
+                      key={p.project_id}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border ${
+                        selection?.action === 'eligible' ? 'bg-green-50 border-green-200'
+                          : selection?.action === 'exempted' ? 'bg-orange-50 border-orange-200'
+                          : 'border-transparent'
+                      }`}
+                    >
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{p.project_name}</p>
                         <p className="text-xs text-gray-400">ID: {p.project_id}</p>
+                        {selection?.action === 'exempted' && selection.exemptionReason && (
+                          <p className="text-xs text-orange-600 mt-0.5">Reason: {selection.exemptionReason}</p>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          disabled={submitting}
-                          onClick={() => selectProject(p.project_id, p.project_name, 'eligible')}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          {isManagerRole ? '+ Select to Add' : '✓ Eligible'}
-                        </button>
-                        <button
-                          disabled={submitting}
-                          onClick={() => setExemptConfirm({
-                            projectName: p.project_name,
-                            message: 'The exemption will be included in your final submission to Quality.',
-                            requireReason: true,
-                            confirmLabel: 'Select Exemption',
-                            onConfirm: (reason: string) =>
-                              selectProject(p.project_id, p.project_name, 'exempted', reason),
-                          })}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          ✕ Select Exemption
-                        </button>
+                        {selection ? (
+                          <button
+                            disabled={submitting}
+                            onClick={() => removeSelectedProject(Number(p.project_id))}
+                            aria-label={`Remove ${p.project_name}`}
+                            className={`w-7 h-7 flex items-center justify-center rounded-full border text-sm font-bold disabled:opacity-40 ${
+                              selection.action === 'eligible'
+                                ? 'border-green-300 text-green-700 hover:bg-green-100'
+                                : 'border-orange-300 text-orange-700 hover:bg-orange-100'
+                            }`}
+                          >
+                            ×
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              disabled={submitting}
+                              onClick={() => selectProject(p.project_id, p.project_name, 'eligible')}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              {isManagerRole ? '+ Select to Add' : '✓ Eligible'}
+                            </button>
+                            <button
+                              disabled={submitting}
+                              onClick={() => setExemptConfirm({
+                                projectName: p.project_name,
+                                message: 'The exemption will be included in your final submission to Quality.',
+                                requireReason: true,
+                                confirmLabel: 'Select Exemption',
+                                onConfirm: (reason: string) =>
+                                  selectProject(p.project_id, p.project_name, 'exempted', reason),
+                              })}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              ✕ Select Exemption
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </>
               )}
 
@@ -435,8 +435,17 @@ function EnrollModal({
                       </span>
                     </div>
                   )}
-                  {completedProjects.map((p: any) => (
-                    <div key={p.project_id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent">
+                  {completedProjects.map((p: any) => {
+                    const selection = selectedByProjectId.get(Number(p.project_id));
+                    return (
+                    <div
+                      key={p.project_id}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border ${
+                        selection?.action === 'eligible' ? 'bg-green-50 border-green-200'
+                          : selection?.action === 'exempted' ? 'bg-orange-50 border-orange-200'
+                          : 'border-transparent'
+                      }`}
+                    >
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-500 truncate">{p.project_name}</p>
                         <p className="text-xs text-gray-400">
@@ -445,32 +454,53 @@ function EnrollModal({
                             <> · Completed {new Date(p.end_date).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</>
                           )}
                         </p>
+                        {selection?.action === 'exempted' && selection.exemptionReason && (
+                          <p className="text-xs text-orange-600 mt-0.5">Reason: {selection.exemptionReason}</p>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          disabled={submitting}
-                          onClick={() => selectProject(p.project_id, p.project_name, 'eligible')}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          {isManagerRole ? '+ Select to Add' : '✓ Eligible'}
-                        </button>
-                        <button
-                          disabled={submitting}
-                          onClick={() => setExemptConfirm({
-                            projectName: p.project_name,
-                            message: 'The exemption will be included in your final submission to Quality.',
-                            requireReason: true,
-                            confirmLabel: 'Select Exemption',
-                            onConfirm: (reason: string) =>
-                              selectProject(p.project_id, p.project_name, 'exempted', reason),
-                          })}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
-                        >
-                          ✕ Select Exemption
-                        </button>
+                        {selection ? (
+                          <button
+                            disabled={submitting}
+                            onClick={() => removeSelectedProject(Number(p.project_id))}
+                            aria-label={`Remove ${p.project_name}`}
+                            className={`w-7 h-7 flex items-center justify-center rounded-full border text-sm font-bold disabled:opacity-40 ${
+                              selection.action === 'eligible'
+                                ? 'border-green-300 text-green-700 hover:bg-green-100'
+                                : 'border-orange-300 text-orange-700 hover:bg-orange-100'
+                            }`}
+                          >
+                            ×
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              disabled={submitting}
+                              onClick={() => selectProject(p.project_id, p.project_name, 'eligible')}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-green-300 text-green-700 hover:bg-green-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              {isManagerRole ? '+ Select to Add' : '✓ Eligible'}
+                            </button>
+                            <button
+                              disabled={submitting}
+                              onClick={() => setExemptConfirm({
+                                projectName: p.project_name,
+                                message: 'The exemption will be included in your final submission to Quality.',
+                                requireReason: true,
+                                confirmLabel: 'Select Exemption',
+                                onConfirm: (reason: string) =>
+                                  selectProject(p.project_id, p.project_name, 'exempted', reason),
+                              })}
+                              className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap disabled:opacity-40"
+                            >
+                              ✕ Select Exemption
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </>
               )}
             </>
